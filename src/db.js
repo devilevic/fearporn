@@ -1,10 +1,9 @@
 const Database = require("better-sqlite3");
-const path = require("path");
 
-// const db = new Database(path.join(__dirname, "..", "data.sqlite"));
 const dbPath = process.env.DB_PATH || "data.sqlite";
 const db = new Database(dbPath);
 
+// Base schema (new installs)
 db.exec(`
 CREATE TABLE IF NOT EXISTS articles (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -16,11 +15,18 @@ CREATE TABLE IF NOT EXISTS articles (
   category TEXT,
   raw_text TEXT,
   summary TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  summarized_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_articles_created_at ON articles(created_at);
 CREATE INDEX IF NOT EXISTS idx_articles_category ON articles(category);
+CREATE INDEX IF NOT EXISTS idx_articles_summarized_at ON articles(summarized_at);
 `);
+
+// Safe “migration” for older DBs (won’t crash if column already exists)
+try { db.exec(`ALTER TABLE articles ADD COLUMN summarized_at TEXT;`); } catch (e) {}
+try { db.exec(`ALTER TABLE articles ADD COLUMN updated_at TEXT;`); } catch (e) {}
 
 module.exports = db;
