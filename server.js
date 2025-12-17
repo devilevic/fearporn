@@ -1,180 +1,247 @@
+"use strict";
+
 require("dotenv").config();
+
 const express = require("express");
+const path = require("path");
+
 const db = require("./src/db");
 
 const app = express();
-app.use(express.static("public"));
 
+// ----- Static assets -----
+app.use("/public", express.static(path.join(__dirname, "public")));
+
+// ----- Config -----
+const SITE_NAME = process.env.SITE_NAME || "fearporn";
+const BASE_URL = process.env.BASE_URL || "";
+
+// ----- Helpers -----
+function escapeHtml(s = "") {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function fmtDate(isoLike) {
+  if (!isoLike) return "";
+  // Handles "YYYY-MM-DD HH:MM:SS" from sqlite or ISO strings
+  const d = new Date(String(isoLike).replace(" ", "T") + (String(isoLike).includes("Z") ? "" : "Z"));
+  if (Number.isNaN(d.getTime())) return String(isoLike);
+
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const mm = d.toLocaleString("en-US", { month: "short", timeZone: "UTC" });
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mi = String(d.getUTCMinutes()).padStart(2, "0");
+  return `${mm} ${dd}, ${hh}:${mi}`;
+}
+
+function domainFromUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.host; // includes www if present
+  } catch {
+    // fallback: try to strip scheme
+    return String(url).replace(/^https?:\/\//, "").split("/")[0] || String(url);
+  }
+}
+
+function summaryToHtml(rawSummary, originalUrl) {
+  if (!rawSummary) return "";
+
+  // Remove any leading indentation / whitespace issues
+  let s = String(rawSummary).replace(/^\s+/, "").trim();
+
+  // If model included a "Source:" line with a URL, replace it with "Source: domain" link
+  // Works whether it's on its own line or inline.
+  const url = originalUrl || "";
+  const host = url ? domainFromUrl(url) : "";
+
+  // Replace any "Source: <url>" occurrences
+  s = s.replace(/Source:\s*(https?:\/\/\S+)/gi, () => {
+    if (!url) return "Source:";
+    return `Source: ${host}`;
+  });
+
+  // Ensure we have a Source line (linked) at end if we have url
+  if (url) {
+    const hasSource = /(^|\n)Source:\s*/i.test(s);
+    if (!hasSource) {
+      s += `\n\nSource: ${host}`;
+    }
+  }
+
+  // Turn into HTML paragraphs
+  const parts = s.split(/\n{2,}/g).map((p) => p.trim()).filter(Boolean);
+
+  // Convert the "Source: host" into a clickable link (same line)
+  const htmlParts = parts.map((p) => {
+    if (/^Source:\s*/i.test(p) && url) {
+      const label = p.replace(/^Source:\s*/i, "").trim() || host;
+      return `<p class="source-line">Source: <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a></p>`;
+    }
+    // regular paragraph, preserve single newlines
+    const safe = escapeHtml(p).replace(/\n/g, "<br/>");
+    return `<p>${safe}</p>`;
+  });
+
+  return htmlParts.join("\n");
+}
+
+function hasColumn(table, col) {
+  try {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+    return cols.some((c) => c.name === col);
+  } catch {
+    return false;
+  }
+}
+
+const HAS_SUMMARIZED_AT = hasColumn("articles", "summarized_at");
+
+// ----- Routes -----
+
+// Homepage: only summarized articles
 app.get("/", (req, res) => {
-  const page = Math.max(1, parseInt(req.query.page || "1", 10));
+  const page = Math.max(parseInt(req.query.page || "1", 10) || 1, 1);
   const limit = 20;
   const offset = (page - 1) * limit;
 
+  const total = db.prepare(`
+    SELECT COUNT(*) AS c
+    FROM articles
+    WHERE summary IS NOT NULL AND summary != ''
+  `).get().c;
+
+  const totalPages = Math.max(Math.ceil(total / limit), 1);
+
+  // Sort: prefer summarized_at if it exists, otherwise created_at
+  const orderExpr = HAS_SUMMARIZED_AT
+    ? "datetime(COALESCE(summarized_at, created_at))"
+    : "datetime(created_at)";
+
   const rows = db.prepare(`
-  SELECT id, title, url, category, created_at, summary, source
-  FROM articles
-  WHERE summary IS NOT NULL AND summary != ''
-  ORDER BY datetime(created_at) DESC
-  LIMIT 50
-`).all();
+    SELECT id, title, url, category, created_at, summary, source
+    ${HAS_SUMMARIZED_AT ? ", summarized_at" : ""}
+    FROM articles
+    WHERE summary IS NOT NULL AND summary != ''
+    ORDER BY ${orderExpr} DESC
+    LIMIT ? OFFSET ?
+  `).all(limit, offset);
 
-  const total = db.prepare(`SELECT COUNT(*) AS c FROM articles WHERE summary IS NOT NULL`).get().c;
-  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const cards = rows.map((r) => {
+    const when = fmtDate((HAS_SUMMARIZED_AT ? r.summarized_at : null) || r.created_at);
+    const cat = r.category ? String(r.category) : "world";
+    const summaryHtml = summaryToHtml(r.summary, r.url);
 
-  // simple HTML without templating yet
-  const itemsHtml = rows.map(r => `
-    <div class="card">
-      <div class="meta">${r.category || "misc"} • ${fmtDate(r.created_at)}</div>
-      <div class="title">${escapeHtml(r.title)}</div>
-      ${r.summary ? `<div class="summary">${renderSummary(r.summary)}</div>` : `<div class="pending">No summary yet.</div>`}
+    return `
+      <article class="card">
+        <div class="meta">${escapeHtml(cat)} • ${escapeHtml(when)}</div>
+        <h2 class="title">${escapeHtml(r.title)}</h2>
+        <div class="summary">${summaryHtml}</div>
+      </article>
+    `;
+  }).join("\n");
+
+  const pagination = (() => {
+    if (totalPages <= 1) return "";
+    const mk = (p) => `/` + (p === 1 ? "" : `?page=${p}`);
+    const links = [];
+    for (let p = 1; p <= totalPages; p++) {
+      links.push(
+        `<a class="page-link ${p === page ? "active" : ""}" href="${mk(p)}">${p}</a>`
+      );
+    }
+    return `<nav class="pagination">${links.join("\n")}</nav>`;
+  })();
+
+  res.status(200).send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>${escapeHtml(SITE_NAME)}</title>
+  <link rel="stylesheet" href="/public/style.css"/>
+  <script src="/public/theme.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">${escapeHtml(SITE_NAME)}</div>
+      <button id="themeToggle" class="theme-toggle" type="button" aria-label="Toggle dark/light">
+        ◐
+      </button>
     </div>
-  `).join("");
+  </header>
 
-  const pager = Array.from({ length: totalPages }, (_, i) => i + 1)
-    .slice(Math.max(0, page - 4), Math.min(totalPages, page + 3))
-    .map(p => p === page ? `<b>${p}</b>` : `<a href="/?page=${p}">${p}</a>`)
-    .join(" ");
+  <main class="wrap">
+    ${cards || `<div class="empty">No summarized articles yet.</div>`}
+    ${pagination}
+  </main>
 
-  res.send(`
-  <html>
-    <head>
-      <meta charset="utf-8"/>
-      <title>${process.env.SITE_NAME || "fearporn.local"}</title>
-      <link rel="stylesheet" href="/style.css"/>
-      <script src="/theme.js" defer></script>
-    </head>
-    <body>
-      <header>
-        <div class="header-inner">
-          <div class="header-row">
-            <div>
-              <h1>fearporn.world</h1>
-              <p class="tagline">bringing the worst humanity has to offer</p>
-            </div>
-
-            <button id="themeToggle" class="theme-toggle" type="button" aria-label="Toggle theme">
-              <span class="theme-icon" aria-hidden="true">🌙</span>
-              <span class="theme-label">Dark</span>
-            </button>
-          </div>
-        </div>
-      </header>
-      <main>
-        ${itemsHtml || "<p>No articles yet. Run ingest.</p>"}
-        <div class="pager">${pager}</div>
-      </main>
-    </body>
-  </html>
-  `);
+  <footer class="footer">
+    <div class="footer-inner">
+      ${BASE_URL ? `<a href="${escapeHtml(BASE_URL)}">${escapeHtml(BASE_URL)}</a>` : ""}
+    </div>
+  </footer>
+</body>
+</html>`);
 });
 
+// Article page (optional; not used if you removed accordion)
+// Still defensive: only uses summarized_at if it exists
 app.get("/a/:id", (req, res) => {
   const id = parseInt(req.params.id, 10);
-  const r = db.prepare(`
-    SELECT id, title, url, category, created_at, summarized_at, summary, source
-    FROM articles WHERE id = ?
+  if (!id) return res.status(404).send("Not found");
+
+  const row = db.prepare(`
+    SELECT id, title, url, category, created_at, summary, source
+    ${HAS_SUMMARIZED_AT ? ", summarized_at" : ""}
+    FROM articles
+    WHERE id = ?
   `).get(id);
 
-  if (!r) return res.status(404).send("Not found");
+  if (!row || !row.summary) return res.status(404).send("Not found");
 
-  if (!r.summary) return res.status(404).send("Not found");
+  const when = fmtDate((HAS_SUMMARIZED_AT ? row.summarized_at : null) || row.created_at);
+  const cat = row.category ? String(row.category) : "world";
+  const summaryHtml = summaryToHtml(row.summary, row.url);
 
-  res.send(`
-  <html>
-    <head>
-      <meta charset="utf-8"/>
-      <title>${escapeHtml(r.title)}</title>
-      <link rel="stylesheet" href="/style.css"/>
-    </head>
-    <body>
-      <header>
-        <a href="/">← back</a>
-      </header>
-      <main>
-        <h2>${escapeHtml(r.title)}</h2>
-        <div class="meta">
-          ${escapeHtml(r.category || "misc")} • ${fmtDate(r.summarized_at || r.created_at)} • ${escapeHtml(r.source || "")}
-        </div>
-        ${r.summary ? `<div class="summary">${renderSummary(r.summary)}</div>` : "<p>No summary yet.</p>"}
-        
-      </main>
-    </body>
-  </html>
-  `);
+  res.status(200).send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>${escapeHtml(row.title)} • ${escapeHtml(SITE_NAME)}</title>
+  <link rel="stylesheet" href="/public/style.css"/>
+  <script src="/public/theme.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/">${escapeHtml(SITE_NAME)}</a>
+      <button id="themeToggle" class="theme-toggle" type="button" aria-label="Toggle dark/light">
+        ◐
+      </button>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <article class="card">
+      <div class="meta">${escapeHtml(cat)} • ${escapeHtml(when)}</div>
+      <h1 class="title">${escapeHtml(row.title)}</h1>
+      <div class="summary">${summaryHtml}</div>
+    </article>
+  </main>
+</body>
+</html>`);
 });
 
-function fmtDate(value) {
-  if (!value) return "";
-
-  // Normalize SQLite + RSS dates
-  const d = new Date(
-    value.includes("T")
-      ? value
-      : value.replace(" ", "T") + "Z"
-  );
-
-  if (isNaN(d.getTime())) return "";
-
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-  const day = String(d.getDate()).padStart(2, "0");
-  const month = months[d.getMonth()];
-  const hours = String(d.getHours()).padStart(2, "0");
-  const minutes = String(d.getMinutes()).padStart(2, "0");
-
-  return `${month} ${day}, ${hours}:${minutes}`;
-}
-
-function sourceLink(url) {
-  try {
-    const u = new URL(url);
-    return u.hostname.replace(/^www\./, "");
-  } catch {
-    return "";
-  }
-}
-
-function escapeHtml(s) {
-  return String(s || "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-function renderSummary(summary) {
-  if (!summary) return "";
-
-  // Look for "Source: <url>"
-  const match = summary.match(/Source:\s*(https?:\/\/\S+)/i);
-
-  if (!match) {
-    return escapeHtml(summary);
-  }
-
-  const url = match[1];
-  const domain = sourceLink(url);
-
-  // Remove the Source line from the text
-const cleaned = summary
-  .replace(match[0], "")        // remove Source: <url>
-  .replace(/\r\n/g, "\n")       // normalize Windows line endings
-  .replace(/^\s+/, "")          // remove leading whitespace/newlines
-  .replace(/\s+$/, "");         // remove trailing whitespace
-
-return (
-  escapeHtml(cleaned) +
-  `<div class="source">
-    Source: <a href="${url}" target="_blank" rel="noopener noreferrer">${domain}</a>
-  </div>`
-);
-}
-
-
+// ----- Start -----
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
