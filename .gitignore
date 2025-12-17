@@ -1,0 +1,4 @@
+echo ".env" >> .gitignore
+echo "data.sqlite" >> .gitignore
+echo "rate_state.json" >> .gitignore
+echo "node_modules" >> .gitignore
