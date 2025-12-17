@@ -11,12 +11,12 @@ app.get("/", (req, res) => {
   const offset = (page - 1) * limit;
 
   const rows = db.prepare(`
-    SELECT id, title, category, created_at, published_at, summarized_at, summary, url
-    FROM articles
-    WHERE summary IS NOT NULL
-    ORDER BY summarized_at DESC, created_at DESC
-    LIMIT ? OFFSET ?
-  `).all(limit, offset);
+  SELECT id, title, url, category, created_at, summary, source
+  FROM articles
+  WHERE summary IS NOT NULL AND summary != ''
+  ORDER BY datetime(created_at) DESC
+  LIMIT 50
+`).all();
 
   const total = db.prepare(`SELECT COUNT(*) AS c FROM articles WHERE summary IS NOT NULL`).get().c;
   const totalPages = Math.max(1, Math.ceil(total / limit));
@@ -24,7 +24,7 @@ app.get("/", (req, res) => {
   // simple HTML without templating yet
   const itemsHtml = rows.map(r => `
     <div class="card">
-      <div class="meta">${r.category || "misc"} • ${fmtDate(r.summarized_at || r.created_at)}</div>
+      <div class="meta">${r.category || "misc"} • ${fmtDate(r.created_at)}</div>
       <div class="title">${escapeHtml(r.title)}</div>
       ${r.summary ? `<div class="summary">${renderSummary(r.summary)}</div>` : `<div class="pending">No summary yet.</div>`}
     </div>
@@ -71,7 +71,7 @@ app.get("/", (req, res) => {
 app.get("/a/:id", (req, res) => {
   const id = parseInt(req.params.id, 10);
   const r = db.prepare(`
-    SELECT id, title, url, category, created_at, summary, source
+    SELECT id, title, url, category, created_at, summarized_at, summary, source
     FROM articles WHERE id = ?
   `).get(id);
 
