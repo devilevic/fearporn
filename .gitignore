@@ -2,3 +2,20 @@ echo ".env" >> .gitignore
 echo "data.sqlite" >> .gitignore
 echo "rate_state.json" >> .gitignore
 echo "node_modules" >> .gitignore
+node_modules
+.env
+data.sqlite
+rate_state.json
+.DS_Store
+
+node_modules
+.env
+data.sqlite
+rate_state.json
+.DS_Store
+
+node_modules
+.env
+data.sqlite
+rate_state.json
+.DS_Store
