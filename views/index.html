@@ -2,11 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Fearporn</title>
-  <link rel="stylesheet" href="/style.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>fearporn</title>
+
+  <!-- CSS -->
+  <link rel="stylesheet" href="/style.css" />
 </head>
 
 <body class="theme-dark">
+
+  <!-- HEADER -->
   <header>
     <div class="header-inner">
       <div class="header-row">
@@ -15,53 +20,75 @@
           <div class="tagline">bringing the worst humanity has to offer</div>
         </div>
 
-        <button class="theme-toggle" onclick="toggleTheme()">
-          <span class="theme-icon">🌓</span>
-          <span class="theme-label">theme</span>
+        <button class="theme-toggle" type="button" onclick="toggleTheme()">
+          <span class="theme-icon">🌙</span>
+          <span class="theme-label">dark</span>
         </button>
       </div>
     </div>
   </header>
 
-  <main id="feed">
-    <!-- articles injected here -->
-  </main>
+  <!-- FEED -->
+  <main id="feed"></main>
 
+  <!-- SCRIPT -->
   <script>
     function toggleTheme() {
-      document.body.classList.toggle("theme-light");
+      const body = document.body;
+      const icon = document.querySelector(".theme-icon");
+      const label = document.querySelector(".theme-label");
+
+      const isDark = body.classList.contains("theme-dark");
+
+      body.classList.toggle("theme-dark", !isDark);
+      body.classList.toggle("theme-light", isDark);
+
+      if (isDark) {
+        icon.textContent = "☀️";
+        label.textContent = "light";
+      } else {
+        icon.textContent = "🌙";
+        label.textContent = "dark";
+      }
+    }
+
+    function formatDate(value) {
+      if (!value) return "";
+      const d = new Date(value);
+      if (isNaN(d)) return "";
+      return d.toLocaleString("en-GB", {
+        day: "2-digit",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit"
+      });
     }
 
     async function load() {
       const res = await fetch("/api/articles");
-      const items = await res.json();
+      const articles = await res.json();
 
       const feed = document.getElementById("feed");
 
-      if (!items.length) {
+      if (!articles.length) {
         feed.innerHTML = "<p>No summarized articles yet.</p>";
         return;
       }
 
-      feed.innerHTML = items.map(a => `
+      feed.innerHTML = articles.map(a => `
         <article class="card">
           <div class="meta">
-            ${a.category || "world"} • ${new Date(a.summarized_at).toLocaleString("en-GB", {
-              day: "2-digit",
-              month: "short",
-              hour: "2-digit",
-              minute: "2-digit"
-            })}
+            ${a.category || "world"} • ${formatDate(a.summarized_at)}
           </div>
 
-          <h2 class="title">${a.title}</h2>
+          <h2 class="title">${a.title || ""}</h2>
 
-          <div class="summary">${a.summary}</div>
+          <div class="summary">${a.summary || ""}</div>
 
           <div class="source">
             Source:
             <a href="${a.url}" target="_blank" rel="noopener">
-              ${a.source_domain}
+              ${a.source_domain || "source"}
             </a>
           </div>
         </article>
@@ -70,5 +97,6 @@
 
     load();
   </script>
+
 </body>
 </html>
