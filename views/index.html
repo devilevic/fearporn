@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Fearporn</title>
+  <link rel="stylesheet" href="/public/style.css" />
+</head>
+
+<body class="theme-dark">
+  <header>
+    <div class="header-inner">
+      <div class="header-row">
+        <div>
+          <h1>fearporn</h1>
+          <div class="tagline">bringing the worst humanity has to offer</div>
+        </div>
+
+        <button class="theme-toggle" onclick="toggleTheme()">
+          <span class="theme-icon">🌓</span>
+          <span class="theme-label">theme</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="feed">
+    <!-- articles injected here -->
+  </main>
+
+  <script>
+    function toggleTheme() {
+      document.body.classList.toggle("theme-light");
+    }
+
+    async function load() {
+      const res = await fetch("/api/articles");
+      const items = await res.json();
+
+      const feed = document.getElementById("feed");
+
+      if (!items.length) {
+        feed.innerHTML = "<p>No summarized articles yet.</p>";
+        return;
+      }
+
+      feed.innerHTML = items.map(a => `
+        <article class="card">
+          <div class="meta">
+            ${a.category || "world"} • ${new Date(a.summarized_at).toLocaleString("en-GB", {
+              day: "2-digit",
+              month: "short",
+              hour: "2-digit",
+              minute: "2-digit"
+            })}
+          </div>
+
+          <h2 class="title">${a.title}</h2>
+
+          <div class="summary">${a.summary}</div>
+
+          <div class="source">
+            Source:
+            <a href="${a.url}" target="_blank" rel="noopener">
+              ${a.source_domain}
+            </a>
+          </div>
+        </article>
+      `).join("");
+    }
+
+    load();
+  </script>
+</body>
+</html>
