@@ -161,6 +161,29 @@ app.get("/", (req, res) => {
 </html>`);
 });
 
+// --- Admin trigger (temporary) ---
+app.post("/admin/run", async (req, res) => {
+  const token = req.headers["x-admin-token"];
+  if (!process.env.ADMIN_TOKEN || token !== process.env.ADMIN_TOKEN) {
+    return res.status(401).send("Unauthorized");
+  }
+
+  try {
+    const { ingestOnce } = require("./scripts/ingest");
+    const { summarizeBatchOnce } = require("./scripts/summarize_batch");
+
+    const ing = await ingestOnce();
+    const sum = await summarizeBatchOnce();
+
+    res.json({ ok: true, ingested: ing, summarized: sum });
+  } catch (e) {
+    console.error(e);
+    res.status(500).send(String(e?.stack || e));
+  }
+});
+
+
+
 // ---------- Start ----------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
