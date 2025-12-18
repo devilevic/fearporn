@@ -8,6 +8,40 @@ const db = require("./src/db");
 
 const app = express();
 
+const { execSync } = require("child_process");
+
+app.get("/admin/run", (req, res) => {
+  const token = req.query.token;
+
+  if (!process.env.ADMIN_TOKEN || token !== process.env.ADMIN_TOKEN) {
+    return res.status(401).send("Unauthorized");
+  }
+
+  try {
+    const ingestOut = execSync("node scripts/ingest.js", {
+      encoding: "utf8",
+      stdio: "pipe"
+    });
+
+    const summarizeOut = execSync("node scripts/summarize_batch.js", {
+      encoding: "utf8",
+      stdio: "pipe"
+    });
+
+    res.type("text/plain").send(
+      "OK\n\n--- INGEST ---\n" +
+      ingestOut +
+      "\n\n--- SUMMARIZE ---\n" +
+      summarizeOut
+    );
+  } catch (err) {
+    console.error(err);
+    res.status(500).type("text/plain").send(err.stack || err.message);
+  }
+});
+
+
+
 // ---------- Static ----------
 app.use("/public", express.static(path.join(__dirname, "public")));
 
