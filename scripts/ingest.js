@@ -1,47 +1,59 @@
+// scripts/ingest.js
 const Parser = require("rss-parser");
-const { db } = require("../src/db");
+const db = require("../src/db");
 const feeds = require("../src/feeds");
 
 const parser = new Parser({ timeout: 15000 });
 
 const insert = db.prepare(`
-  INSERT INTO articles (source, source_url, title, url, published_at, category)
-  VALUES (@source, @source_url, @title, @url, @published_at, @category)
+  INSERT OR IGNORE INTO articles
+    (source_name, source_domain, title, url, published_at, category, created_at)
+  VALUES
+    (@source_name, @source_domain, @title, @url, @published_at, @category, datetime('now'))
 `);
 
+function domainFromUrl(u) {
+  try {
+    return new URL(u).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
 async function run() {
-  let inserted = 0;
+  let insertedCount = 0;
 
   for (const f of feeds) {
+    let feed;
     try {
-      const feed = await parser.parseURL(f.url);
-      const items = (feed.items || []).slice(0, 20);
-
-      for (const item of items) {
-        const url = item.link?.trim();
-        const title = item.title?.trim();
-        if (!url || !title) continue;
-
-        try {
-          insert.run({
-            source: f.name,
-            source_url: f.url,
-            title,
-            url,
-            published_at: item.isoDate || item.pubDate || null,
-            category: f.category
-          });
-          inserted++;
-        } catch (e) {
-          // duplicate url => ignore
-        }
-      }
+      feed = await parser.parseURL(f.url);
     } catch (e) {
-      console.error("Feed failed:", f.name, e.message);
+      console.error(`Feed failed: ${f.name}`, e.message);
+      continue;
+    }
+
+    for (const item of feed.items || []) {
+      const url = item.link || item.guid;
+      if (!url) continue;
+
+      const record = {
+        source_name: f.name,
+        source_domain: domainFromUrl(url),
+        title: (item.title || "").trim(),
+        url,
+        published_at: item.isoDate || item.pubDate || null,
+        category: f.category || "world",
+      };
+
+      const info = insert.run(record);
+      insertedCount += info.changes || 0;
     }
   }
 
-  console.log(`Ingest done. Inserted ${inserted} new items.`);
+  console.log(`Ingest done. Inserted ${insertedCount} new items.`);
 }
 
-run();
+run().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
