@@ -4,7 +4,7 @@ require("dotenv").config();
  * Summarize using OpenAI Chat Completions.
  * - Uses only headline + URL (no invented details).
  * - OUTPUT DOES NOT INCLUDE FULL URL anywhere.
- * - Final line is: "Source: <domain>" (e.g. "theverge.com")
+ * - Exactly ONE final line: "Source: <domain>"
  */
 async function summarizeWithOpenAI({ title, url }) {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -12,7 +12,7 @@ async function summarizeWithOpenAI({ title, url }) {
 
   const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 
-  // Derive a clean source domain like "theverge.com"
+  // Derive clean source domain like "theverge.com"
   let sourceDomain = "unknown";
   try {
     const u = new URL(url);
@@ -102,14 +102,14 @@ Source domain to print: ${sourceDomain}
 
   /**
    * HARD GUARANTEE:
-   * - Remove ALL "Source:" lines anywhere
+   * - Remove ALL Source lines the model may have added
    * - Remove ALL URLs just in case
    * - Append exactly ONE final Source line
    */
-  const normalizeSource = (text) => {
+  function normalizeSource(text) {
     let cleaned = String(text || "");
 
-    // Remove any Source: lines anywhere in the text
+    // Remove any Source: lines anywhere
     cleaned = cleaned.replace(/^Source:.*$/gim, "");
 
     // Strip any URLs that slipped through
@@ -117,9 +117,8 @@ Source domain to print: ${sourceDomain}
 
     cleaned = cleaned.trim();
 
-    // Append the single authoritative source line
     return `${cleaned}\n\nSource: ${sourceDomain}`.trim();
-  };
+  }
 
   out = normalizeSource(out);
 
