@@ -4,7 +4,9 @@ require("dotenv").config();
 const path = require("path");
 const express = require("express");
 const { spawnSync } = require("child_process");
-const { db, DB_PATH } = require("./src/db");
+
+// IMPORTANT: src/db.js exports the db object directly
+const db = require("./src/db");
 
 const app = express();
 
@@ -29,7 +31,7 @@ app.get("/_debug", (req, res) => {
 
     res.json({
       ok: true,
-      db_path: process.env.DB_PATH || DB_PATH,
+      db_path: process.env.DB_PATH || null,
       total,
       summarized,
       unsummarized,
@@ -42,23 +44,27 @@ app.get("/_debug", (req, res) => {
 /* -------------------- API -------------------- */
 app.get("/api/articles", (req, res) => {
   try {
-    const rows = db.prepare(`
-      SELECT
-        id,
-        category,
-        title,
-        url,
-        source_name,
-        source_domain,
-        published_at,
-        created_at,
-        summarized_at,
-        summary
-      FROM articles
-      WHERE summary IS NOT NULL AND summary != ''
-      ORDER BY summarized_at DESC
-      LIMIT 50
-    `).all();
+    const rows = db
+      .prepare(
+        `
+        SELECT
+          id,
+          category,
+          title,
+          url,
+          source_name,
+          source_domain,
+          published_at,
+          created_at,
+          summarized_at,
+          summary
+        FROM articles
+        WHERE summary IS NOT NULL AND summary != ''
+        ORDER BY summarized_at DESC
+        LIMIT 50
+      `
+      )
+      .all();
 
     res.json(rows);
   } catch (e) {
@@ -72,7 +78,7 @@ app.get("/", (req, res) => {
 });
 
 /* -------------------- ADMIN: run pipeline -------------------- */
-/* TEMPORARY – we will remove this once data is in the DB */
+/* TEMPORARY – remove later */
 app.get("/admin/run", (req, res) => {
   try {
     const token = req.query.token || req.get("x-admin-token");
@@ -88,8 +94,8 @@ app.get("/admin/run", (req, res) => {
       return {
         label,
         status: r.status,
-        stdout: r.stdout,
-        stderr: r.stderr,
+        stdout: (r.stdout || "").slice(-8000),
+        stderr: (r.stderr || "").slice(-8000),
       };
     };
 
