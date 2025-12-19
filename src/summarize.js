@@ -1,10 +1,18 @@
+// src/summarize.js
 require("dotenv").config();
 
+/**
+ * Summarize using OpenAI Chat Completions.
+ * - Uses only headline + URL (no invented details).
+ * - Outputs in strict 4-part format with "Source:" final line.
+ */
 async function summarizeWithOpenAI({ title, url }) {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("Missing OPENAI_API_KEY in .env");
+  if (!apiKey) throw new Error("Missing OPENAI_API_KEY in environment");
 
-const prompt = `
+  const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+
+  const prompt = `
 You write for an ironic negative-news portal called "fearporn.world".
 IMPORTANT: You only know the HEADLINE and LINK. Do NOT invent details, numbers, locations, motives, quotes, or identities not present in the headline.
 If the headline is vague, speak in general terms and say what is *unclear*.
@@ -37,60 +45,56 @@ EMOJI RULES (important):
 - Do NOT use emojis that celebrate harm, mock victims, or target protected groups.
 - If unsure, default to tension/danger emojis rather than playful ones.
 
-  If the paragraph sounds like generic AI journalism, rewrite it to be sharper, shorter, and more opinionated.
+If the paragraph sounds like generic AI journalism, rewrite it to be sharper, shorter, and more opinionated.
 
 Headline: ${title}
 Link: ${url}
 `.trim();
 
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model: "gpt-4.1-mini",
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.6,
-      max_tokens: 280
-    })
-  });
+  // Small helper: call OpenAI with timeout + good error messages
+  async function callOpenAI(userPrompt, { temperature = 0.6, max_tokens = 280 } = {}) {
+    const controller = new AbortController();
+    const timeoutMs = Number(process.env.OPENAI_TIMEOUT_MS || 30000);
+    const t = setTimeout(() => controller.abort(), timeoutMs);
 
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`OpenAI error ${res.status}: ${txt}`);
+    try {
+      const res = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: userPrompt }],
+          temperature,
+          max_tokens,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(`OpenAI error ${res.status}: ${txt || res.statusText}`);
+      }
+
+      const data = await res.json();
+      return data.choices?.[0]?.message?.content?.trim() || "";
+    } finally {
+      clearTimeout(t);
+    }
   }
 
-  const data = await res.json();
+  let out = await callOpenAI(prompt, { temperature: 0.6, max_tokens: 280 });
 
-let out = data.choices?.[0]?.message?.content?.trim() || "";
-
-// Format guard: ensure Source line exists
-if (!out.includes("Source:")) {
-  const retryPrompt = prompt + "\n\nDO NOT OMIT THE FINAL 'Source:' LINE.";
-
-  const retryRes = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model: "gpt-4.1-mini",
-      messages: [{ role: "user", content: retryPrompt }],
-      temperature: 0.5,
-      max_tokens: 280
-    })
-  });
-
-  if (retryRes.ok) {
-    const retryData = await retryRes.json();
-    out = retryData.choices?.[0]?.message?.content?.trim() || out;
+  // Format guard: ensure Source line exists
+  if (!out.includes("Source:")) {
+    const retryPrompt = prompt + "\n\nDO NOT OMIT THE FINAL 'Source:' LINE.";
+    const retryOut = await callOpenAI(retryPrompt, { temperature: 0.5, max_tokens: 280 });
+    if (retryOut) out = retryOut;
   }
-}
 
-return out;
+  return out;
 }
 
 module.exports = { summarizeWithOpenAI };

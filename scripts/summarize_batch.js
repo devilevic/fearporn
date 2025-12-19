@@ -1,7 +1,11 @@
+// scripts/summarize_batch.js
 require("dotenv").config();
-const { db } = require("../src/db");
+
+// IMPORTANT: src/db.js exports the db object directly (not { db })
+const db = require("../src/db");
+
 const { summarizeWithOpenAI } = require("../src/summarize");
-const { getState, canUseOne, recordUse, STATE_PATH } = require("../src/rateLimit");
+const { getState, recordUse, STATE_PATH } = require("../src/rateLimit");
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -49,18 +53,25 @@ async function run() {
 
     try {
       console.log("Summarizing:", r.title);
+
       const summary = await summarizeWithOpenAI({ title: r.title, url: r.url });
+
+      // Save + timestamp (fearporn publish time)
       update.run(summary, r.id);
 
+      // Rate-limit accounting
       recordUse();
       console.log("✓ saved");
 
       if (COOLDOWN_MS > 0) await sleep(COOLDOWN_MS);
     } catch (e) {
-      console.error("✗ failed:", e.message);
+      console.error("✗ failed:", e?.message || e);
       if (COOLDOWN_MS > 0) await sleep(COOLDOWN_MS);
     }
   }
 }
 
-run();
+run().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
