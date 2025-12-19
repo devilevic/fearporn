@@ -1,45 +1,47 @@
+// src/db.js
+const path = require("path");
+const fs = require("fs");
 const Database = require("better-sqlite3");
 
-const dbPath = process.env.DB_PATH || "data.sqlite";
-const db = new Database(dbPath);
+const DB_PATH =
+  process.env.DB_PATH || path.join(__dirname, "..", "data.sqlite");
 
-// 1) Ensure base table exists (new installs)
+// Ensure directory exists (important if DB_PATH is /var/data/...)
+fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+
+const db = new Database(DB_PATH);
+
+// Recommended pragmas for production-ish usage
+db.pragma("journal_mode = WAL");
+db.pragma("synchronous = NORMAL");
+
+// Create base table if missing (latest schema)
 db.exec(`
-CREATE TABLE IF NOT EXISTS articles (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  source TEXT NOT NULL,
-  source_url TEXT NOT NULL,
-  title TEXT NOT NULL,
-  url TEXT NOT NULL UNIQUE,
-  published_at TEXT,
-  category TEXT,
-  raw_text TEXT,
-  summary TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
+  CREATE TABLE IF NOT EXISTS articles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT,
+    url TEXT UNIQUE,
+    source_name TEXT,
+    source_domain TEXT,
+    summary TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    summarized_at TEXT
+  );
 `);
 
-// 2) Migrate old DBs safely (existing installs)
-function hasColumn(table, col) {
+function ensureColumn(table, colName, colType) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all();
-  return cols.some((c) => c.name === col);
+  const exists = cols.some((c) => c.name === colName);
+  if (!exists) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${colName} ${colType};`);
+  }
 }
 
-try {
-  if (!hasColumn("articles", "summarized_at")) {
-    db.exec(`ALTER TABLE articles ADD COLUMN summarized_at TEXT;`);
-  }
-  if (!hasColumn("articles", "updated_at")) {
-    db.exec(`ALTER TABLE articles ADD COLUMN updated_at TEXT;`);
-  }
-} catch (e) {
-  // If something goes wrong, don’t crash the whole app
-  console.error("DB migration error:", e.message);
-}
-
-// 3) Create indexes AFTER migration (critical)
-try { db.exec(`CREATE INDEX IF NOT EXISTS idx_articles_created_at ON articles(created_at);`); } catch {}
-try { db.exec(`CREATE INDEX IF NOT EXISTS idx_articles_category ON articles(category);`); } catch {}
-try { db.exec(`CREATE INDEX IF NOT EXISTS idx_articles_summarized_at ON articles(summarized_at);`); } catch {}
+// Migrations: add any columns your code expects
+ensureColumn("articles", "source_name", "TEXT");
+ensureColumn("articles", "source_domain", "TEXT");
+ensureColumn("articles", "summary", "TEXT");
+ensureColumn("articles", "created_at", "TEXT");
+ensureColumn("articles", "summarized_at", "TEXT");
 
 module.exports = db;
