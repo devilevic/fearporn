@@ -1,7 +1,9 @@
 const fs = require("fs");
 const path = require("path");
 
-const STATE_PATH = path.join(__dirname, "..", "rate_state.json");
+const STATE_PATH = process.env.RATE_STATE_PATH
+  ? process.env.RATE_STATE_PATH
+  : path.join(__dirname, "..", "rate_state.json");
 
 function todayKey() {
   // local date key, e.g. 2025-12-14

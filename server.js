@@ -8,26 +8,29 @@ const app = express();
    STATIC FILES
    -------------------------------------------------- */
 
-// Serve files from /public as root static assets
-// This makes /style.css and /theme.js work
+// Serve /public as web root (so /style.css works)
 app.use(express.static(path.join(__dirname, "public")));
-
-// Also allow /public/style.css (belt & suspenders)
+// Also allow /public/style.css (optional)
 app.use("/public", express.static(path.join(__dirname, "public")));
 
 /* --------------------------------------------------
-   VERSION CHECK (debug helper)
+   VERSION CHECK
    -------------------------------------------------- */
 app.get("/_version", (req, res) => {
-  res.type("text/plain").send("VERSION 2025-12-18 FINAL SERVER.JS");
+  res.type("text/plain").send("VERSION 2025-12-19 server.js");
 });
 
 /* --------------------------------------------------
-   DATABASE
+   DATABASE PATH
    -------------------------------------------------- */
-
-// IMPORTANT: DB path relative to project root
-process.env.DB_PATH = path.join(__dirname, "data.sqlite");
+/**
+ * IMPORTANT:
+ * - On Render, set DB_PATH to your persistent disk path (e.g. /var/data/data.sqlite)
+ * - Locally, it falls back to ./data.sqlite
+ */
+if (!process.env.DB_PATH) {
+  process.env.DB_PATH = path.join(__dirname, "data.sqlite");
+}
 
 const db = require("./src/db");
 
@@ -58,22 +61,34 @@ runPipeline();
 
 app.get("/api/articles", (req, res) => {
   try {
-    const rows = db.prepare(`
-      SELECT
-        id,
-        title,
-        url,
-        summary,
-        source_domain,
-        category,
-        summarized_at
-      FROM articles
-      WHERE summary IS NOT NULL
-      ORDER BY summarized_at DESC
-      LIMIT 50
-    `).all();
+    const rows = db
+      .prepare(
+        `
+        SELECT
+          id,
+          title,
+          url,
+          summary,
+          category,
+          summarized_at
+        FROM articles
+        WHERE summary IS NOT NULL
+        ORDER BY summarized_at DESC
+        LIMIT 50
+      `
+      )
+      .all();
 
-    res.json(rows);
+    // Derive source_domain from url (no DB column required)
+    const enriched = rows.map((r) => {
+      let domain = "";
+      try {
+        domain = new URL(r.url).hostname.replace(/^www\./, "");
+      } catch {}
+      return { ...r, source_domain: domain };
+    });
+
+    res.json(enriched);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -88,7 +103,7 @@ app.get("/", (req, res) => {
 });
 
 /* --------------------------------------------------
-   START SERVER (Render-compatible)
+   START SERVER (Render compatible)
    -------------------------------------------------- */
 
 const PORT = process.env.PORT || 3000;
