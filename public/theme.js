@@ -1,12 +1,10 @@
-(function () {
-  const KEY = "fearporn_theme"; // "dark" or "light"
+(() => {
+  const KEY = "fearporn_theme"; // "dark" | "light"
 
   function apply(theme) {
     document.body.classList.toggle("theme-light", theme === "light");
-
     const btn = document.getElementById("themeToggle");
     if (!btn) return;
-
     const icon = btn.querySelector(".theme-icon");
     const label = btn.querySelector(".theme-label");
 
@@ -19,17 +17,17 @@
     }
   }
 
-  function current() {
+  function currentTheme() {
     const saved = localStorage.getItem(KEY);
-    if (saved === "dark" || saved === "light") return saved;
-    // default: respect system preference
-    return window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
-      ? "light"
-      : "dark";
+    if (saved === "light" || saved === "dark") return saved;
+    const prefersLight =
+      window.matchMedia &&
+      window.matchMedia("(prefers-color-scheme: light)").matches;
+    return prefersLight ? "light" : "dark";
   }
 
   document.addEventListener("DOMContentLoaded", () => {
-    let theme = current();
+    let theme = currentTheme();
     apply(theme);
 
     const btn = document.getElementById("themeToggle");

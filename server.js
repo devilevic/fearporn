@@ -1,64 +1,45 @@
+// server.js
+require("dotenv").config();
+
 const express = require("express");
 const path = require("path");
-const { execSync } = require("child_process");
+const { db, DB_PATH } = require("./src/db");
 
 const app = express();
 
-/* --------------------------------------------------
-   STATIC FILES
-   -------------------------------------------------- */
-
-// Serve /public as web root (so /style.css works)
+// Static assets (so /style.css and /theme.js work)
 app.use(express.static(path.join(__dirname, "public")));
-// Also allow /public/style.css (optional)
 app.use("/public", express.static(path.join(__dirname, "public")));
 
-/* --------------------------------------------------
-   VERSION CHECK
-   -------------------------------------------------- */
+// Version endpoint
 app.get("/_version", (req, res) => {
-  res.type("text/plain").send("VERSION 2025-12-19 server.js");
+  res.type("text").send(`VERSION 2025-12-19 server.js`);
 });
 
-/* --------------------------------------------------
-   DATABASE PATH
-   -------------------------------------------------- */
-/**
- * IMPORTANT:
- * - On Render, set DB_PATH to your persistent disk path (e.g. /var/data/data.sqlite)
- * - Locally, it falls back to ./data.sqlite
- */
-if (!process.env.DB_PATH) {
-  process.env.DB_PATH = path.join(__dirname, "data.sqlite");
-}
-
-const db = require("./src/db");
-
-/* --------------------------------------------------
-   PIPELINE (INGEST + SUMMARIZE)
-   -------------------------------------------------- */
-
-function runPipeline() {
+// Debug endpoint (helps stop guessing)
+app.get("/_debug", (req, res) => {
   try {
-    console.log("Running ingest...");
-    execSync("node scripts/ingest.js", { stdio: "inherit" });
+    const total = db.prepare("SELECT COUNT(*) AS c FROM articles").get().c;
+    const summarized = db
+      .prepare("SELECT COUNT(*) AS c FROM articles WHERE summary IS NOT NULL AND summary != ''")
+      .get().c;
+    const unsummarized = db
+      .prepare("SELECT COUNT(*) AS c FROM articles WHERE summary IS NULL OR summary = ''")
+      .get().c;
 
-    console.log("Running summarize...");
-    execSync("node scripts/summarize_batch.js", { stdio: "inherit" });
-
-    console.log("Pipeline complete.");
-  } catch (err) {
-    console.error("Pipeline failed:", err.message);
+    res.json({
+      ok: true,
+      db_path: process.env.DB_PATH || DB_PATH,
+      total,
+      summarized,
+      unsummarized,
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
   }
-}
+});
 
-// Run once on startup
-runPipeline();
-
-/* --------------------------------------------------
-   API
-   -------------------------------------------------- */
-
+// API: only summarized articles
 app.get("/api/articles", (req, res) => {
   try {
     const rows = db
@@ -66,45 +47,33 @@ app.get("/api/articles", (req, res) => {
         `
         SELECT
           id,
+          category,
           title,
           url,
-          summary,
-          category,
-          summarized_at
+          source_name,
+          source_domain,
+          published_at,
+          created_at,
+          summarized_at,
+          summary
         FROM articles
-        WHERE summary IS NOT NULL
+        WHERE summary IS NOT NULL AND summary != ''
         ORDER BY summarized_at DESC
         LIMIT 50
       `
       )
       .all();
 
-    // Derive source_domain from url (no DB column required)
-    const enriched = rows.map((r) => {
-      let domain = "";
-      try {
-        domain = new URL(r.url).hostname.replace(/^www\./, "");
-      } catch {}
-      return { ...r, source_domain: domain };
-    });
-
-    res.json(enriched);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
-/* --------------------------------------------------
-   FRONTEND
-   -------------------------------------------------- */
-
+// Frontend
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "views", "index.html"));
 });
-
-/* --------------------------------------------------
-   START SERVER (Render compatible)
-   -------------------------------------------------- */
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {

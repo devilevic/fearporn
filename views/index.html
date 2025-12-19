@@ -1,102 +1,84 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>fearporn</title>
-
-  <!-- CSS -->
   <link rel="stylesheet" href="/style.css" />
 </head>
-
 <body class="theme-dark">
-
-  <!-- HEADER -->
   <header>
     <div class="header-inner">
       <div class="header-row">
-        <div>
-          <h1>fearporn</h1>
-          <div class="tagline">bringing the worst humanity has to offer</div>
-        </div>
+        <div class="brand">fearporn</div>
 
-        <button class="theme-toggle" type="button" onclick="toggleTheme()">
+        <button id="themeToggle" class="theme-toggle" type="button">
           <span class="theme-icon">🌙</span>
-          <span class="theme-label">dark</span>
+          <span class="theme-label">Dark</span>
         </button>
       </div>
     </div>
   </header>
 
-  <!-- FEED -->
-  <main id="feed"></main>
+  <main class="wrap">
+    <div id="feed"></div>
+  </main>
 
-  <!-- SCRIPT -->
+  <script src="/theme.js"></script>
   <script>
-    function toggleTheme() {
-      const body = document.body;
-      const icon = document.querySelector(".theme-icon");
-      const label = document.querySelector(".theme-label");
-
-      const isDark = body.classList.contains("theme-dark");
-
-      body.classList.toggle("theme-dark", !isDark);
-      body.classList.toggle("theme-light", isDark);
-
-      if (isDark) {
-        icon.textContent = "☀️";
-        label.textContent = "light";
-      } else {
-        icon.textContent = "🌙";
-        label.textContent = "dark";
-      }
+    function escapeHtml(s){
+      return String(s||"")
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#39;");
     }
 
-    function formatDate(value) {
-      if (!value) return "";
-      const d = new Date(value);
-      if (isNaN(d)) return "";
-      return d.toLocaleString("en-GB", {
-        day: "2-digit",
-        month: "short",
-        hour: "2-digit",
-        minute: "2-digit"
-      });
+    function formatStamp(article){
+      // display "category • Dec 14, 09:31"
+      const cat = (article.category || "news").toLowerCase();
+      const dt = article.summarized_at || article.created_at || article.published_at;
+      if(!dt) return cat;
+
+      const d = new Date(dt);
+      const opts = { month:"short", day:"2-digit" };
+      const datePart = d.toLocaleDateString("en-US", opts);
+      const hh = String(d.getHours()).padStart(2,"0");
+      const mm = String(d.getMinutes()).padStart(2,"0");
+      return `${cat} \u2022 ${datePart}, ${hh}:${mm}`;
     }
 
-    async function load() {
-      const res = await fetch("/api/articles");
-      const articles = await res.json();
+    async function load(){
+      const el = document.getElementById("feed");
+      el.innerHTML = "";
 
-      const feed = document.getElementById("feed");
+      const res = await fetch("/api/articles", { cache:"no-store" });
+      const data = await res.json();
 
-      if (!articles.length) {
-        feed.innerHTML = "<p>No summarized articles yet.</p>";
+      if(!Array.isArray(data) || data.length === 0){
+        el.innerHTML = `<div class="card"><div class="meta">No summarized articles yet.</div></div>`;
         return;
       }
 
-      feed.innerHTML = articles.map(a => `
-        <article class="card">
-          <div class="meta">
-            ${a.category || "world"} • ${formatDate(a.summarized_at)}
-          </div>
+      for(const a of data){
+        const domain = a.source_domain ? a.source_domain : (new URL(a.url)).hostname.replace(/^www\./,"");
+        const meta = formatStamp(a);
 
-          <h2 class="title">${a.title || ""}</h2>
-
-          <div class="summary">${a.summary || ""}</div>
-
-          <div class="source">
-            Source:
-            <a href="${a.url}" target="_blank" rel="noopener">
-              ${a.source_domain || "source"}
-            </a>
-          </div>
-        </article>
-      `).join("");
+        el.insertAdjacentHTML("beforeend", `
+          <article class="card">
+            <div class="meta">
+              <span class="pill">${escapeHtml(meta)}</span>
+            </div>
+            <div class="title">${escapeHtml(a.title)}</div>
+            <p class="summary">${escapeHtml(a.summary)}</p>
+            <div class="source">Source: <a href="${escapeHtml(a.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(domain)}</a></div>
+          </article>
+        `);
+      }
     }
 
     load();
   </script>
-
 </body>
 </html>

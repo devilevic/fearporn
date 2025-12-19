@@ -1,58 +1,73 @@
+// src/db.js
+const Database = require("better-sqlite3");
 const path = require("path");
 const fs = require("fs");
-const Database = require("better-sqlite3");
 
-let DB_PATH = process.env.DB_PATH || path.join(__dirname, "..", "data.sqlite");
+const DB_PATH =
+  process.env.DB_PATH || path.join(process.cwd(), "data.sqlite");
 
-try {
-  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-} catch (e) {
-  // Don't crash the whole service if the disk path isn't writable
-  // (Render disk missing/mis-mounted/permissions). Fall back so app stays up.
-  const fallback = "/tmp/data.sqlite";
-  console.error(`DB dir not writable for ${DB_PATH}. Falling back to ${fallback}`);
-  DB_PATH = fallback;
-  process.env.DB_PATH = fallback;
-  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-}
-
-const db = new Database(DB_PATH);
-
-// Pragmas (safe defaults)
-db.pragma("journal_mode = WAL");
-db.pragma("synchronous = NORMAL");
-
-// Create the table if it doesn't exist (latest schema we want)
-db.exec(`
-  CREATE TABLE IF NOT EXISTS articles (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT,
-    url TEXT UNIQUE,
-    source_name TEXT,
-    source_domain TEXT,
-    category TEXT,
-    summary TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    summarized_at TEXT
-  );
-`);
-
-function ensureColumn(table, colName, colType) {
-  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
-  const exists = cols.some((c) => c.name === colName);
-  if (!exists) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${colName} ${colType};`);
+function ensureDirForFile(filePath) {
+  const dir = path.dirname(filePath);
+  // If dir is "/", mkdirSync will throw; ignore
+  if (!dir || dir === "/") return;
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (e) {
+    // If you configured /var/data without a mounted disk, it will fail here.
+    // Let it fail loudly so you fix the platform config.
+    throw e;
   }
 }
 
-// Migrations: add anything code might SELECT/INSERT
-ensureColumn("articles", "title", "TEXT");
-ensureColumn("articles", "url", "TEXT");
-ensureColumn("articles", "source_name", "TEXT");
-ensureColumn("articles", "source_domain", "TEXT");
-ensureColumn("articles", "category", "TEXT");       // <-- fixes your current error
-ensureColumn("articles", "summary", "TEXT");
-ensureColumn("articles", "created_at", "TEXT");
-ensureColumn("articles", "summarized_at", "TEXT");
+ensureDirForFile(DB_PATH);
 
-module.exports = db;
+const db = new Database(DB_PATH);
+db.pragma("journal_mode = WAL");
+db.pragma("synchronous = NORMAL");
+
+// Base table (latest schema)
+db.exec(`
+CREATE TABLE IF NOT EXISTS articles (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  category      TEXT,
+  title         TEXT NOT NULL,
+  url           TEXT NOT NULL UNIQUE,
+  source_name   TEXT,
+  source_url    TEXT,
+  source_domain TEXT,
+  published_at  TEXT,
+  created_at    TEXT DEFAULT (datetime('now')),
+  summary       TEXT,
+  summarized_at TEXT
+);
+`);
+
+function hasColumn(table, col) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  return cols.some((c) => c.name === col);
+}
+
+function addColumnIfMissing(table, col, type) {
+  if (!hasColumn(table, col)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type};`);
+  }
+}
+
+// Migrations (prevents “no such column …” forever)
+addColumnIfMissing("articles", "category", "TEXT");
+addColumnIfMissing("articles", "source_name", "TEXT");
+addColumnIfMissing("articles", "source_url", "TEXT");
+addColumnIfMissing("articles", "source_domain", "TEXT");
+addColumnIfMissing("articles", "published_at", "TEXT");
+addColumnIfMissing("articles", "created_at", "TEXT");
+addColumnIfMissing("articles", "summary", "TEXT");
+addColumnIfMissing("articles", "summarized_at", "TEXT");
+
+// Indexes
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_articles_summarized_at ON articles(summarized_at);
+CREATE INDEX IF NOT EXISTS idx_articles_created_at ON articles(created_at);
+CREATE INDEX IF NOT EXISTS idx_articles_category ON articles(category);
+`);
+
+module.exports = { db, DB_PATH };
