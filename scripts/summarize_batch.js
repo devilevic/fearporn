@@ -1,7 +1,7 @@
 require("dotenv").config();
-const db = require("../src/db");
+const { db } = require("../src/db");
 const { summarizeWithOpenAI } = require("../src/summarize");
-const { getDailyCount, incrementDailyCount, STATE_PATH } = require("../src/rateLimit");
+const { getState, canUseOne, recordUse, STATE_PATH } = require("../src/rateLimit");
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -14,7 +14,7 @@ const COOLDOWN_MS = Math.max(0, parseInt(process.env.SUMMARY_COOLDOWN_MS || "0",
 const select = db.prepare(`
   SELECT id, title, url
   FROM articles
-  WHERE summary IS NULL
+  WHERE summary IS NULL OR summary = ''
   ORDER BY created_at DESC
   LIMIT ?
 `);
@@ -26,7 +26,7 @@ const update = db.prepare(`
 `);
 
 async function run() {
-  let usedToday = getDailyCount();
+  let usedToday = getState().count;
   console.log(`Daily summaries used: ${usedToday}/${DAILY_CAP} (state: ${STATE_PATH})`);
 
   if (usedToday >= DAILY_CAP) {
@@ -41,7 +41,7 @@ async function run() {
   }
 
   for (const r of rows) {
-    usedToday = getDailyCount();
+    usedToday = getState().count;
     if (usedToday >= DAILY_CAP) {
       console.log("Daily cap reached mid-run. Stopping.");
       break;
@@ -52,7 +52,7 @@ async function run() {
       const summary = await summarizeWithOpenAI({ title: r.title, url: r.url });
       update.run(summary, r.id);
 
-      incrementDailyCount(1);
+      recordUse();
       console.log("✓ saved");
 
       if (COOLDOWN_MS > 0) await sleep(COOLDOWN_MS);
