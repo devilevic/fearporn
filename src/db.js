@@ -1,16 +1,19 @@
-// src/db.js
 const path = require("path");
 const fs = require("fs");
 const Database = require("better-sqlite3");
 
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, "..", "data.sqlite");
+let DB_PATH = process.env.DB_PATH || path.join(__dirname, "..", "data.sqlite");
 
-// Ensure parent directory exists (works with Render disk mount /var/data)
 try {
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 } catch (e) {
-  // If /var/data isn't mounted/writable, fail loudly (you fixed this by re-adding the disk)
-  throw e;
+  // Don't crash the whole service if the disk path isn't writable
+  // (Render disk missing/mis-mounted/permissions). Fall back so app stays up.
+  const fallback = "/tmp/data.sqlite";
+  console.error(`DB dir not writable for ${DB_PATH}. Falling back to ${fallback}`);
+  DB_PATH = fallback;
+  process.env.DB_PATH = fallback;
+  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 }
 
 const db = new Database(DB_PATH);
