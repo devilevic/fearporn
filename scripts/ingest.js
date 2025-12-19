@@ -1,5 +1,5 @@
 const Parser = require("rss-parser");
-const db = require("../src/db");
+const { db } = require("../src/db");
 const feeds = require("../src/feeds");
 
 const parser = new Parser({ timeout: 15000 });
