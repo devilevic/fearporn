@@ -3,19 +3,23 @@ const path = require("path");
 const fs = require("fs");
 const Database = require("better-sqlite3");
 
-const DB_PATH =
-  process.env.DB_PATH || path.join(__dirname, "..", "data.sqlite");
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, "..", "data.sqlite");
 
-// Ensure directory exists (important if DB_PATH is /var/data/...)
-fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+// Ensure parent directory exists (works with Render disk mount /var/data)
+try {
+  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+} catch (e) {
+  // If /var/data isn't mounted/writable, fail loudly (you fixed this by re-adding the disk)
+  throw e;
+}
 
 const db = new Database(DB_PATH);
 
-// Recommended pragmas for production-ish usage
+// Pragmas (safe defaults)
 db.pragma("journal_mode = WAL");
 db.pragma("synchronous = NORMAL");
 
-// Create base table if missing (latest schema)
+// Create the table if it doesn't exist (latest schema we want)
 db.exec(`
   CREATE TABLE IF NOT EXISTS articles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23,6 +27,7 @@ db.exec(`
     url TEXT UNIQUE,
     source_name TEXT,
     source_domain TEXT,
+    category TEXT,
     summary TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     summarized_at TEXT
@@ -37,9 +42,12 @@ function ensureColumn(table, colName, colType) {
   }
 }
 
-// Migrations: add any columns your code expects
+// Migrations: add anything code might SELECT/INSERT
+ensureColumn("articles", "title", "TEXT");
+ensureColumn("articles", "url", "TEXT");
 ensureColumn("articles", "source_name", "TEXT");
 ensureColumn("articles", "source_domain", "TEXT");
+ensureColumn("articles", "category", "TEXT");       // <-- fixes your current error
 ensureColumn("articles", "summary", "TEXT");
 ensureColumn("articles", "created_at", "TEXT");
 ensureColumn("articles", "summarized_at", "TEXT");
