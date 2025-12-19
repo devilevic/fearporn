@@ -3,10 +3,6 @@
 // and swap the URL for the current one.
 
 module.exports = [
-  // --- “Center” wires / broad news (generally less opinionated) ---
-  { name: "Reuters Top News",      url: "https://feeds.reuters.com/reuters/topNews",       category: "world" },
-  { name: "Reuters World News",    url: "https://feeds.reuters.com/reuters/worldNews",     category: "world" },
-  { name: "Reuters Business News", url: "https://feeds.reuters.com/reuters/businessNews",  category: "business" },
 
   // --- Center-right / right-leaning (pick your preferred mix) ---
   // WSJ (often RSS is on feeds.a.dj.com; if one fails, search “WSJ RSS” and swap)
