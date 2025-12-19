@@ -13,27 +13,115 @@ const app = express();
 app.use(express.static(path.join(__dirname, "public")));
 app.use("/public", express.static(path.join(__dirname, "public")));
 
+/* -------------------- Helpers: schema-safe selects -------------------- */
+let _articlesColsCache = null;
+
+function getArticlesColumns() {
+  if (_articlesColsCache) return _articlesColsCache;
+  const cols = db
+    .prepare("PRAGMA table_info(articles)")
+    .all()
+    .map((r) => r.name);
+  _articlesColsCache = new Set(cols);
+  return _articlesColsCache;
+}
+
+function hasCol(name) {
+  return getArticlesColumns().has(name);
+}
+
+function pickCols(preferred) {
+  const set = getArticlesColumns();
+  return preferred.filter((c) => set.has(c));
+}
+
+function bestOrderBy() {
+  // Prefer "created_at" (published on fearporn), otherwise feed time, otherwise id
+  if (hasCol("created_at")) return "created_at DESC";
+  if (hasCol("published_at")) return "published_at DESC";
+  return "id DESC";
+}
+
+/* -------------------- Pipeline runner (NON-BLOCKING, self-healing lock) -------------------- */
+let pipelineRunning = false;
+let pipelineChild = null;
+let pipelineStartedAt = null;
+
+function runPipelineAsync(label = "manual") {
+  if (pipelineRunning) return { ok: false, reason: "pipeline already running" };
+
+  pipelineRunning = true;
+  pipelineStartedAt = Date.now();
+
+  pipelineChild = spawn(
+    "bash",
+    ["-lc", "node scripts/ingest.js && node scripts/summarize_batch.js"],
+    { cwd: __dirname, stdio: ["ignore", "pipe", "pipe"] }
+  );
+
+  pipelineChild.stdout.on("data", (d) => process.stdout.write(`[pipeline:${label}] ${d}`));
+  pipelineChild.stderr.on("data", (d) => process.stderr.write(`[pipeline:${label}] ${d}`));
+
+  pipelineChild.on("close", (code) => {
+    pipelineRunning = false;
+    pipelineChild = null;
+    pipelineStartedAt = null;
+    console.log(`[pipeline:${label}] exit code ${code}`);
+  });
+
+  // Safety: kill after 30 minutes AND release lock even if "close" never fires.
+  setTimeout(() => {
+    if (!pipelineRunning) return;
+    console.error(`[pipeline:${label}] timeout -> killing child and releasing lock`);
+
+    try {
+      if (pipelineChild) pipelineChild.kill("SIGKILL");
+    } catch {}
+
+    pipelineRunning = false;
+    pipelineChild = null;
+    pipelineStartedAt = null;
+  }, 30 * 60 * 1000);
+
+  return { ok: true };
+}
+
 /* -------------------- Health / debug -------------------- */
 app.get("/_version", (req, res) => {
-  res.type("text").send("VERSION 2025-12-19 server.js + scheduler");
+  res.type("text").send("VERSION 2025-12-19 server.js + scheduler + admin");
 });
 
 app.get("/_debug", (req, res) => {
   try {
+    const cols = Array.from(getArticlesColumns());
+
     const total = db.prepare("SELECT COUNT(*) AS c FROM articles").get().c;
-    const summarized = db
-      .prepare("SELECT COUNT(*) AS c FROM articles WHERE summary IS NOT NULL AND summary != ''")
-      .get().c;
-    const unsummarized = db
-      .prepare("SELECT COUNT(*) AS c FROM articles WHERE summary IS NULL OR summary = ''")
-      .get().c;
+
+    // summary column should exist; if not, we degrade gracefully
+    let summarized = 0;
+    let unsummarized = total;
+
+    if (hasCol("summary")) {
+      summarized = db
+        .prepare("SELECT COUNT(*) AS c FROM articles WHERE summary IS NOT NULL AND summary != ''")
+        .get().c;
+      unsummarized = db
+        .prepare("SELECT COUNT(*) AS c FROM articles WHERE summary IS NULL OR summary = ''")
+        .get().c;
+    }
 
     res.json({
       ok: true,
       db_path: process.env.DB_PATH || null,
+      columns: cols,
       total,
       summarized,
       unsummarized,
+      pipeline: {
+        running: pipelineRunning,
+        pid: pipelineChild?.pid || null,
+        startedAt: pipelineStartedAt,
+      },
       scheduler: {
         enabled: process.env.ENABLE_SCHEDULER === "true",
         interval_ms: Number(process.env.SCHEDULER_INTERVAL_MS || 1800000),
@@ -56,23 +144,35 @@ app.get("/article/:id", (req, res) => {
 /* -------------------- API -------------------- */
 app.get("/api/articles", (req, res) => {
   try {
-    // NOTE: This assumes your current schema supports these fields.
-    // If you changed schema recently, keep this query in sync with src/db.js
-    const rows = db
-      .prepare(
-        `
-        SELECT
-          id, title, url, category,
-          published_at, created_at,
-          summary, source_domain
-        FROM articles
-        WHERE summary IS NOT NULL AND summary != ''
-        ORDER BY COALESCE(created_at, published_at) DESC
-        LIMIT 100
-      `
-      )
-      .all();
+    // Use only columns that actually exist to avoid "no such column" crashes
+    const cols = pickCols([
+      "id",
+      "title",
+      "url",
+      "category",
+      "published_at",
+      "created_at",
+      "summary",
+      "source_domain",
+    ]);
 
+    if (!cols.includes("id") || !cols.includes("title")) {
+      return res.status(500).json({ error: "articles table missing required columns (id/title)" });
+    }
+
+    const whereSummary = hasCol("summary")
+      ? "WHERE summary IS NOT NULL AND summary != ''"
+      : "";
+
+    const sql = `
+      SELECT ${cols.join(", ")}
+      FROM articles
+      ${whereSummary}
+      ORDER BY ${bestOrderBy()}
+      LIMIT 100
+    `;
+
+    const rows = db.prepare(sql).all();
     res.json(rows);
   } catch (e) {
     res.status(500).json({ error: e?.message || String(e) });
@@ -81,112 +181,101 @@ app.get("/api/articles", (req, res) => {
 
 app.get("/api/articles/:id", (req, res) => {
   try {
-    const row = db
-      .prepare(
-        `
-        SELECT
-          id, title, url, category,
-          published_at, created_at,
-          summary, source_domain
-        FROM articles
-        WHERE id = ?
-        `
-      )
-      .get(req.params.id);
+    const cols = pickCols([
+      "id",
+      "title",
+      "url",
+      "category",
+      "published_at",
+      "created_at",
+      "summary",
+      "source_domain",
+    ]);
 
+    const sql = `
+      SELECT ${cols.join(", ")}
+      FROM articles
+      WHERE id = ?
+      LIMIT 1
+    `;
+
+    const row = db.prepare(sql).get(req.params.id);
     if (!row) return res.status(404).send("Not found");
-    if (!row.summary) return res.status(404).send("Not found"); // only serve summarized
+    if (hasCol("summary") && (!row.summary || row.summary === "")) return res.status(404).send("Not found");
+
     res.json(row);
   } catch (e) {
     res.status(500).json({ error: e?.message || String(e) });
   }
 });
 
-/* -------------------- Optional admin trigger -------------------- */
+/* -------------------- Admin endpoints (optional) -------------------- */
 if (process.env.ENABLE_ADMIN_RUN === "true") {
-  app.get("/admin/run", (req, res) => {
-    try {
-      const token = req.query.token || req.get("x-admin-token");
-      if (!process.env.ADMIN_TOKEN || token !== process.env.ADMIN_TOKEN) {
-        return res.status(401).send("Unauthorized");
-      }
-
-      // non-blocking: return immediately
-      const started = runPipelineAsync("admin");
-      if (!started.ok) return res.status(409).json(started);
-
-      res.json({ ok: true, started: true });
-    } catch (e) {
-      res.status(500).send(e?.message || String(e));
+  const auth = (req, res) => {
+    const token = req.query.token || req.get("x-admin-token");
+    if (!process.env.ADMIN_TOKEN || token !== process.env.ADMIN_TOKEN) {
+      res.status(401).send("Unauthorized");
+      return false;
     }
+    return true;
+  };
+
+  app.get("/admin/run", (req, res) => {
+    if (!auth(req, res)) return;
+
+    const started = runPipelineAsync("admin");
+    if (!started.ok) return res.status(409).json(started);
+
+    // return immediately (non-blocking)
+    res.json({ ok: true, started: true });
   });
-}
 
-/* -------------------- Pipeline runner (NON-BLOCKING) -------------------- */
-let pipelineRunning = false;
+  app.get("/admin/status", (req, res) => {
+    if (!auth(req, res)) return;
+    res.json({
+      pipelineRunning,
+      pid: pipelineChild?.pid || null,
+      startedAt: pipelineStartedAt,
+    });
+  });
 
-function runPipelineAsync(label = "manual") {
-  if (pipelineRunning) return { ok: false, reason: "pipeline already running" };
-  pipelineRunning = true;
-
-  const child = spawn(
-    "bash",
-    ["-lc", "node scripts/ingest.js && node scripts/summarize_batch.js"],
-    { cwd: __dirname, stdio: ["ignore", "pipe", "pipe"] }
-  );
-
-  child.stdout.on("data", (d) => process.stdout.write(`[pipeline:${label}] ${d}`));
-  child.stderr.on("data", (d) => process.stderr.write(`[pipeline:${label}] ${d}`));
-
-  child.on("close", (code) => {
+  app.get("/admin/reset", (req, res) => {
+    if (!auth(req, res)) return;
     pipelineRunning = false;
-    console.log(`[pipeline:${label}] exit code ${code}`);
+    pipelineChild = null;
+    pipelineStartedAt = null;
+    res.json({ ok: true, reset: true });
   });
-
-  // Safety: kill after 30 minutes (prevents “hang forever” situations)
-  setTimeout(() => {
-    if (!pipelineRunning) return;
-    try {
-      child.kill("SIGKILL");
-    } catch {}
-  }, 30 * 60 * 1000);
-
-  return { ok: true };
 }
 
 /* -------------------- Scheduler -------------------- */
-let schedulerRunning = false;
+let schedulerTickRunning = false;
 
 function startScheduler() {
   const enabled = process.env.ENABLE_SCHEDULER === "true";
   if (!enabled) return;
 
-  const intervalMs = Number(process.env.SCHEDULER_INTERVAL_MS || 1800000); // default 30m
+  const intervalMs = Number(process.env.SCHEDULER_INTERVAL_MS || 1800000); // 30 min default
   console.log(`[scheduler] enabled, interval ${intervalMs}ms`);
 
   const tick = () => {
-    if (schedulerRunning) {
-      console.log("[scheduler] previous run still active, skipping tick");
+    if (schedulerTickRunning) {
+      console.log("[scheduler] previous tick still active, skipping");
       return;
     }
-    schedulerRunning = true;
+    schedulerTickRunning = true;
 
     try {
-      console.log("[scheduler] running ingest + summarize...");
+      console.log("[scheduler] starting pipeline...");
       const started = runPipelineAsync("scheduler");
-      if (!started.ok) {
-        console.log(`[scheduler] skip: ${started.reason}`);
-      } else {
-        console.log("[scheduler] pipeline started");
-      }
+      if (!started.ok) console.log(`[scheduler] skip: ${started.reason}`);
     } catch (e) {
       console.error("[scheduler] error:", e?.message || e);
     } finally {
-      schedulerRunning = false;
+      schedulerTickRunning = false;
     }
   };
 
-  // run once shortly after boot, then interval
   setTimeout(tick, 5000);
   setInterval(tick, intervalMs);
 }
