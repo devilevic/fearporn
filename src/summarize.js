@@ -1,4 +1,3 @@
-// src/summarize.js
 require("dotenv").config();
 
 /**
@@ -18,9 +17,7 @@ async function summarizeWithOpenAI({ title, url }) {
   try {
     const u = new URL(url);
     sourceDomain = (u.hostname || "unknown").replace(/^www\./, "");
-  } catch (_) {
-    // keep "unknown"
-  }
+  } catch (_) {}
 
   const prompt = `
 You write for an ironic negative-news portal called "fearporn.world".
@@ -103,37 +100,39 @@ Source domain to print: ${sourceDomain}
 
   let out = await callOpenAI(prompt, { temperature: 0.6, max_tokens: 280 });
 
-  // Ensure a Source line exists and is domain-only
-  const ensureSourceLine = (text) => {
-    const lines = String(text || "").split("\n");
-    const hasSource = lines.some((l) => l.trim().toLowerCase().startsWith("source:"));
-    let cleaned = text;
+  /**
+   * HARD GUARANTEE:
+   * - Remove ALL "Source:" lines anywhere
+   * - Remove ALL URLs just in case
+   * - Append exactly ONE final Source line
+   */
+  const normalizeSource = (text) => {
+    let cleaned = String(text || "");
 
-    if (!hasSource) {
-      cleaned = `${text}\nSource: ${sourceDomain}`;
-    }
+    // Remove any Source: lines anywhere in the text
+    cleaned = cleaned.replace(/^Source:.*$/gim, "");
 
-    // Replace any Source: http... with Source: <domain>
-    cleaned = cleaned.replace(/^Source:\s*https?:\/\/\S+.*$/gim, `Source: ${sourceDomain}`);
+    // Strip any URLs that slipped through
+    cleaned = cleaned.replace(/https?:\/\/\S+/gi, "");
 
-    // If any full URL appears anywhere, strip it (just in case)
-    cleaned = cleaned.replace(/https?:\/\/\S+/g, "");
+    cleaned = cleaned.trim();
 
-    // If "Source:" line got nuked by stripping, restore it
-    if (!cleaned.toLowerCase().includes("source:")) {
-      cleaned = `${cleaned.trim()}\nSource: ${sourceDomain}`;
-    }
-
-    return cleaned.trim();
+    // Append the single authoritative source line
+    return `${cleaned}\n\nSource: ${sourceDomain}`.trim();
   };
 
-  out = ensureSourceLine(out);
+  out = normalizeSource(out);
 
-  // If model still printed URL-like text, retry once with stricter instruction
+  // Retry once if model still leaks URLs
   if (/https?:\/\//i.test(out)) {
-    const retryPrompt = prompt + "\n\nYOU VIOLATED THE RULE. REMOVE ALL URLS. PRINT ONLY: Source: " + sourceDomain;
-    const retryOut = await callOpenAI(retryPrompt, { temperature: 0.5, max_tokens: 280 });
-    if (retryOut) out = ensureSourceLine(retryOut);
+    const retryPrompt =
+      prompt +
+      "\n\nYOU VIOLATED THE RULE. REMOVE ALL URLS. PRINT ONLY ONE FINAL SOURCE LINE.";
+    const retryOut = await callOpenAI(retryPrompt, {
+      temperature: 0.5,
+      max_tokens: 280,
+    });
+    if (retryOut) out = normalizeSource(retryOut);
   }
 
   return out;
