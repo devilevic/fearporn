@@ -4,7 +4,8 @@ require("dotenv").config();
 /**
  * Summarize using OpenAI Chat Completions.
  * - Uses only headline + URL (no invented details).
- * - Outputs in strict 4-part format with "Source:" final line.
+ * - OUTPUT DOES NOT INCLUDE FULL URL anywhere.
+ * - Final line is: "Source: <domain>" (e.g. "theverge.com")
  */
 async function summarizeWithOpenAI({ title, url }) {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -12,10 +13,25 @@ async function summarizeWithOpenAI({ title, url }) {
 
   const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 
+  // Derive a clean source domain like "theverge.com"
+  let sourceDomain = "unknown";
+  try {
+    const u = new URL(url);
+    sourceDomain = (u.hostname || "unknown").replace(/^www\./, "");
+  } catch (_) {
+    // keep "unknown"
+  }
+
   const prompt = `
 You write for an ironic negative-news portal called "fearporn.world".
+
 IMPORTANT: You only know the HEADLINE and LINK. Do NOT invent details, numbers, locations, motives, quotes, or identities not present in the headline.
 If the headline is vague, speak in general terms and say what is *unclear*.
+
+CRITICAL OUTPUT RULE:
+- DO NOT print the full URL anywhere in the output.
+- DO NOT print "http", "https", or any long link text.
+- Only print the source domain (example: "theverge.com") on the final line.
 
 STYLE (very important):
 - Write like a sharp tabloid columnist, not a neutral reporter.
@@ -34,7 +50,7 @@ OUTPUT FORMAT (exact):
 2) One short paragraph (3–5 sentences) written as a reaction, not a summary.
 3) Closing line: one short sarcastic sentence that ends with "What could possibly go wrong?"
    - include exactly 1 emoji in the closing line
-4) Final line: Source: <url>
+4) Final line: Source: ${sourceDomain}
 
 EMOJI RULES (important):
 - Use 3 to 5 emojis total.
@@ -48,10 +64,10 @@ EMOJI RULES (important):
 If the paragraph sounds like generic AI journalism, rewrite it to be sharper, shorter, and more opinionated.
 
 Headline: ${title}
-Link: ${url}
+Link (for your private reference only, DO NOT print it): ${url}
+Source domain to print: ${sourceDomain}
 `.trim();
 
-  // Small helper: call OpenAI with timeout + good error messages
   async function callOpenAI(userPrompt, { temperature = 0.6, max_tokens = 280 } = {}) {
     const controller = new AbortController();
     const timeoutMs = Number(process.env.OPENAI_TIMEOUT_MS || 30000);
@@ -87,11 +103,37 @@ Link: ${url}
 
   let out = await callOpenAI(prompt, { temperature: 0.6, max_tokens: 280 });
 
-  // Format guard: ensure Source line exists
-  if (!out.includes("Source:")) {
-    const retryPrompt = prompt + "\n\nDO NOT OMIT THE FINAL 'Source:' LINE.";
+  // Ensure a Source line exists and is domain-only
+  const ensureSourceLine = (text) => {
+    const lines = String(text || "").split("\n");
+    const hasSource = lines.some((l) => l.trim().toLowerCase().startsWith("source:"));
+    let cleaned = text;
+
+    if (!hasSource) {
+      cleaned = `${text}\nSource: ${sourceDomain}`;
+    }
+
+    // Replace any Source: http... with Source: <domain>
+    cleaned = cleaned.replace(/^Source:\s*https?:\/\/\S+.*$/gim, `Source: ${sourceDomain}`);
+
+    // If any full URL appears anywhere, strip it (just in case)
+    cleaned = cleaned.replace(/https?:\/\/\S+/g, "");
+
+    // If "Source:" line got nuked by stripping, restore it
+    if (!cleaned.toLowerCase().includes("source:")) {
+      cleaned = `${cleaned.trim()}\nSource: ${sourceDomain}`;
+    }
+
+    return cleaned.trim();
+  };
+
+  out = ensureSourceLine(out);
+
+  // If model still printed URL-like text, retry once with stricter instruction
+  if (/https?:\/\//i.test(out)) {
+    const retryPrompt = prompt + "\n\nYOU VIOLATED THE RULE. REMOVE ALL URLS. PRINT ONLY: Source: " + sourceDomain;
     const retryOut = await callOpenAI(retryPrompt, { temperature: 0.5, max_tokens: 280 });
-    if (retryOut) out = retryOut;
+    if (retryOut) out = ensureSourceLine(retryOut);
   }
 
   return out;
