@@ -188,3 +188,26 @@ header{
   color: var(--muted);
   padding: 0 4px;
 }
+
+/* ---- layout + pagination fixes ---- */
+.wrap{max-width:900px;margin:0 auto;padding:24px;}
+.header-inner{max-width:900px;margin:0 auto;padding:24px;}
+.header-row{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;}
+.brand-wrap{display:flex;flex-direction:column;gap:6px;}
+.brand{margin:0;line-height:1.05;}
+.brand-world{color:#cc4f00;}
+.tagline{margin:0;opacity:.85;}
+.theme-btn{margin-left:auto;align-self:flex-start;}
+
+.card{margin-top:16px;}
+.article-title{margin:0 0 8px 0;color:#cc4f00;}
+.meta{font-size:0.9rem;opacity:.75;margin-bottom:10px;}
+.summary{white-space:pre-wrap;margin:0 0 10px 0;font-family:inherit;}
+.source-line{margin-top:6px;font-size:0.95rem;opacity:.9;}
+.source-line a{color:inherit;text-decoration:underline; text-underline-offset:3px;}
+
+.pagination{display:flex;justify-content:center;align-items:center;gap:12px;margin:28px 0 16px;}
+.page-btn{padding:8px 12px;border-radius:10px;border:1px solid var(--border);background:var(--panel);color:var(--text);cursor:pointer;}
+.page-btn:disabled{opacity:.5;cursor:not-allowed;}
+.page-info{opacity:.8;}
+

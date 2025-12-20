@@ -1,47 +1,95 @@
 // server.js
 require("dotenv").config();
 
-const express = require("express");
 const path = require("path");
+const express = require("express");
 const { spawn } = require("child_process");
 
-const db = require("./src/db");
+const db = require("./src/db"); // must export a better-sqlite3 db instance
+const { getDailyCount, incrementDailyCount, STATE_PATH } = require("./src/rateLimit");
 
 const app = express();
-const PORT = process.env.PORT || 10000;
+app.use(express.json());
 
+// ---- config ----
+const PORT = process.env.PORT || 10000;
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
 const DB_PATH = process.env.DB_PATH || "/var/data/data.sqlite";
 
-// -------------------- Static + views --------------------
-app.use(express.static(path.join(__dirname, "public"))); // serves /style.css if public/style.css exists
-app.use(express.json());
+const SCHEDULER_ENABLED = (process.env.SCHEDULER_ENABLED || "true").toLowerCase() !== "false";
+const SCHEDULER_INTERVAL_MS = parseInt(process.env.SCHEDULER_INTERVAL_MS || "1800000", 10); // 30 min default
 
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "views", "index.html"));
-});
+// ---- static ----
+app.use(express.static(path.join(__dirname, "public")));
 
-// simple “is this the deployed version?” endpoint
+// ---- helpers ----
+function requireAdmin(req, res) {
+  const token = req.query.token || req.headers["x-admin-token"];
+  if (!ADMIN_TOKEN || token !== ADMIN_TOKEN) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return false;
+  }
+  return true;
+}
+
+function clampInt(v, fallback, min, max) {
+  const n = Number.parseInt(v, 10);
+  if (Number.isNaN(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+function runChild(label, cmd, args, timeoutMs = 6 * 60 * 1000) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+
+    let stdout = "";
+    let stderr = "";
+    let done = false;
+
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      try {
+        child.kill("SIGKILL");
+      } catch {}
+      resolve({
+        label,
+        code: null,
+        ms: Date.now() - start,
+        stdout,
+        stderr: stderr + `\n[pipeline:${label}] timeout after ${timeoutMs}ms -> killing child\n`,
+      });
+    }, timeoutMs);
+
+    child.stdout.on("data", (d) => (stdout += d.toString()));
+    child.stderr.on("data", (d) => (stderr += d.toString()));
+
+    child.on("close", (code) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ label, code, ms: Date.now() - start, stdout, stderr });
+    });
+  });
+}
+
+// ---- version/debug ----
 app.get("/_version", (req, res) => {
-  res.type("text").send("VERSION 2025-12-20 pagination");
+  res.type("text").send("VERSION 2025-12-20 server.js + scheduler + async pipeline");
 });
 
-// debug endpoint: confirms DB + counts
 app.get("/_debug", (req, res) => {
   try {
-    const cols = db
+    const columns = db
       .prepare(`PRAGMA table_info(articles)`)
       .all()
       .map((r) => r.name);
 
-    const total = db.prepare(`SELECT COUNT(*) as c FROM articles`).get().c;
+    const total = db.prepare(`SELECT COUNT(*) AS c FROM articles`).get().c;
 
     const summarized = db
-      .prepare(
-        `SELECT COUNT(*) as c
-         FROM articles
-         WHERE summary IS NOT NULL AND TRIM(summary) <> ''`
-      )
+      .prepare(`SELECT COUNT(*) AS c FROM articles WHERE summary IS NOT NULL AND summary != ''`)
       .get().c;
 
     const unsummarized = total - summarized;
@@ -49,220 +97,156 @@ app.get("/_debug", (req, res) => {
     res.json({
       ok: true,
       db_path: DB_PATH,
-      columns: cols,
+      columns,
       total,
       summarized,
       unsummarized,
-      pipeline: {
-        running: !!pipeline.running,
-        startedAt: pipeline.startedAt || null,
-        lastRunAt: pipeline.lastRunAt || null,
-        lastResultOk: pipeline.lastResultOk ?? null,
-      },
-      scheduler: scheduler.enabled
-        ? { enabled: true, interval_ms: scheduler.intervalMs }
-        : { enabled: false },
+      pipeline: pipelineState(),
+      scheduler: { enabled: SCHEDULER_ENABLED, interval_ms: SCHEDULER_INTERVAL_MS },
     });
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
+    res.json({ ok: false, error: e.message });
   }
 });
 
-// -------------------- API: paginated articles --------------------
-// GET /api/articles?page=1&limit=10
+// ---- API: paginated summarized articles ----
+// supports: /api/articles?limit=10&offset=0
 app.get("/api/articles", (req, res) => {
   try {
-    const limitRaw = parseInt(req.query.limit, 10);
-    const pageRaw = parseInt(req.query.page, 10);
+    const limit = clampInt(req.query.limit, 10, 1, 50);
+    const offset = clampInt(req.query.offset, 0, 0, 1_000_000_000);
 
-    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(50, limitRaw)) : 10;
-    const page = Number.isFinite(pageRaw) ? Math.max(1, pageRaw) : 1;
-    const offset = (page - 1) * limit;
-
-    const where = `WHERE summary IS NOT NULL AND TRIM(summary) <> ''`;
-
-    const total = db.prepare(`SELECT COUNT(*) as c FROM articles ${where}`).get().c;
-    const pages = Math.max(1, Math.ceil(total / limit));
-
-    const items = db
+    const rows = db
       .prepare(
         `
-        SELECT id, title, url, category, published_at, created_at,
-               summary, source_domain, source_name, source_url
+        SELECT id, title, url, category, published_at, created_at, summary, source_domain, source_name
         FROM articles
-        ${where}
-        ORDER BY
-          COALESCE(published_at, summarized_at, created_at) DESC,
-          id DESC
+        WHERE summary IS NOT NULL AND summary != ''
+        ORDER BY datetime(created_at) DESC
         LIMIT ? OFFSET ?
-        `
+      `
       )
       .all(limit, offset);
 
-    res.json({ items, total, page, pages, limit });
+    res.json(rows);
   } catch (e) {
-    res.status(500).json({ error: String(e?.message || e) });
+    res.status(500).json({ error: e.message });
   }
 });
 
-// -------------------- Admin pipeline (ingest + summarize) --------------------
-function isAuthed(req) {
-  const token = req.query.token || req.get("x-admin-token") || "";
-  return ADMIN_TOKEN && token === ADMIN_TOKEN;
+// ---- HTML ----
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "views", "index.html"));
+});
+
+// ---- pipeline lock/state ----
+let PIPELINE_LOCK = false;
+let PIPELINE_PID = null;
+let PIPELINE_STARTED_AT = null;
+
+let LAST_RUN_AT = null;
+let LAST_RESULT = null;
+
+function pipelineState() {
+  return {
+    running: PIPELINE_LOCK,
+    pid: PIPELINE_PID,
+    startedAt: PIPELINE_STARTED_AT,
+    lastRunAt: LAST_RUN_AT,
+    lastResultOk: LAST_RESULT ? !!LAST_RESULT.ok : null,
+  };
 }
 
-const pipeline = {
-  running: false,
-  child: null,
-  startedAt: null,
-  lastRunAt: null,
-  lastResult: null,
-  lastResultOk: null,
-};
-
-function runNodeScript(label, scriptPath, timeoutMs = 6 * 60 * 1000) {
-  return new Promise((resolve) => {
-    const started = Date.now();
-    const child = spawn(process.execPath, [scriptPath], {
-      cwd: __dirname,
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.on("data", (d) => (stdout += d.toString()));
-    child.stderr.on("data", (d) => (stderr += d.toString()));
-
-    const timer = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } catch {}
-      resolve({
-        label,
-        code: null,
-        ms: Date.now() - started,
-        stdout,
-        stderr: stderr + `\n[pipeline:${label}] timeout after ${timeoutMs}ms -> killing child\n`,
-      });
-    }, timeoutMs);
-
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({
-        label,
-        code,
-        ms: Date.now() - started,
-        stdout,
-        stderr,
-      });
-    });
-  });
-}
-
-async function runPipeline(who = "admin") {
-  const ingest = await runNodeScript(`${who}:ingest`, path.join(__dirname, "scripts", "ingest.js"));
-  if (ingest.code !== 0) return { ok: false, step: "ingest", ingest };
-
-  const summarize = await runNodeScript(
-    `${who}:summarize`,
-    path.join(__dirname, "scripts", "summarize_batch.js")
-  );
-  if (summarize.code !== 0) return { ok: false, step: "summarize", ingest, summarize };
-
-  return { ok: true, ingest, summarize };
-}
-
-app.get("/admin/run", async (req, res) => {
-  if (!isAuthed(req)) return res.status(401).json({ ok: false, error: "unauthorized" });
-
-  if (pipeline.running) {
-    return res.status(409).json({ ok: false, reason: "pipeline already running" });
+// ---- pipeline runner ----
+async function runPipeline(labelPrefix = "scheduler") {
+  if (PIPELINE_LOCK) {
+    return { ok: false, reason: "pipeline already running" };
   }
 
-  pipeline.running = true;
-  pipeline.startedAt = Date.now();
-  pipeline.lastResult = null;
-  pipeline.lastResultOk = null;
+  PIPELINE_LOCK = true;
+  PIPELINE_STARTED_AT = Date.now();
 
-  // run async, return immediately
-  res.json({ ok: true, started: true });
+  const startedAtIso = new Date().toISOString();
+  const result = {
+    ok: true,
+    at: startedAtIso,
+    ingest: null,
+    summarize: null,
+  };
 
   try {
-    const result = await runPipeline("admin");
-    pipeline.lastRunAt = Date.now();
-    pipeline.lastResult = { ...result, at: new Date().toISOString() };
-    pipeline.lastResultOk = !!result.ok;
-  } catch (e) {
-    pipeline.lastRunAt = Date.now();
-    pipeline.lastResult = { ok: false, error: String(e?.message || e), at: new Date().toISOString() };
-    pipeline.lastResultOk = false;
+    // ingest
+    PIPELINE_PID = "ingest";
+    result.ingest = await runChild(`${labelPrefix}:ingest`, "node", ["scripts/ingest.js"], 6 * 60 * 1000);
+    if (result.ingest.code !== 0) {
+      result.ok = false;
+      return result;
+    }
+
+    // summarize
+    PIPELINE_PID = "summarize";
+    result.summarize = await runChild(`${labelPrefix}:summarize`, "node", ["scripts/summarize_batch.js"], 6 * 60 * 1000);
+    if (result.summarize.code !== 0) {
+      result.ok = false;
+      return result;
+    }
+
+    return result;
   } finally {
-    pipeline.running = false;
-    pipeline.startedAt = null;
+    LAST_RUN_AT = Date.now();
+    LAST_RESULT = result;
+
+    PIPELINE_LOCK = false;
+    PIPELINE_PID = null;
+    PIPELINE_STARTED_AT = null;
   }
+}
+
+// ---- admin endpoints ----
+app.get("/admin/run", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const r = await runPipeline("admin");
+  if (r.ok === false && r.reason === "pipeline already running") {
+    return res.status(409).json({ ok: false, reason: r.reason });
+  }
+  res.json(r.ok ? { ok: true, started: true } : { ok: false, result: r });
 });
 
 app.get("/admin/status", (req, res) => {
-  if (!isAuthed(req)) return res.status(401).json({ ok: false, error: "unauthorized" });
-
+  if (!requireAdmin(req, res)) return;
   res.json({
-    pipelineRunning: pipeline.running,
-    startedAt: pipeline.startedAt,
-    lastRunAt: pipeline.lastRunAt,
-    lastResult: pipeline.lastResult,
+    pipelineRunning: PIPELINE_LOCK,
+    pid: PIPELINE_PID,
+    startedAt: PIPELINE_STARTED_AT,
+    lastRunAt: LAST_RUN_AT,
+    lastResult: LAST_RESULT,
   });
 });
 
 app.get("/admin/reset", (req, res) => {
-  if (!isAuthed(req)) return res.status(401).json({ ok: false, error: "unauthorized" });
-
-  // we don’t keep a single long-lived child (each script is spawned separately),
-  // so reset just clears the lock/state.
-  pipeline.running = false;
-  pipeline.startedAt = null;
-
+  if (!requireAdmin(req, res)) return;
+  // This only resets the lock; use with care.
+  PIPELINE_LOCK = false;
+  PIPELINE_PID = null;
+  PIPELINE_STARTED_AT = null;
   res.json({ ok: true, reset: true });
 });
 
-// -------------------- Scheduler --------------------
-const scheduler = {
-  enabled: (process.env.SCHEDULER_ENABLED || "true").toLowerCase() === "true",
-  intervalMs: parseInt(process.env.SCHEDULER_INTERVAL_MS || "1800000", 10),
-  timer: null,
-};
-
-async function schedulerTick() {
-  if (pipeline.running) {
-    console.log("[scheduler] skip: pipeline already running");
-    return;
-  }
-  console.log("[scheduler] starting pipeline...");
-  pipeline.running = true;
-  pipeline.startedAt = Date.now();
-
-  try {
-    const result = await runPipeline("scheduler");
-    pipeline.lastRunAt = Date.now();
-    pipeline.lastResult = { ...result, at: new Date().toISOString() };
-    pipeline.lastResultOk = !!result.ok;
-    console.log("[scheduler] pipeline", result.ok ? "OK" : "FAILED");
-  } catch (e) {
-    pipeline.lastRunAt = Date.now();
-    pipeline.lastResult = { ok: false, error: String(e?.message || e), at: new Date().toISOString() };
-    pipeline.lastResultOk = false;
-    console.log("[scheduler] pipeline FAILED:", e?.message || e);
-  } finally {
-    pipeline.running = false;
-    pipeline.startedAt = null;
-  }
+// ---- scheduler ----
+if (SCHEDULER_ENABLED) {
+  console.log(`[scheduler] enabled, interval ${SCHEDULER_INTERVAL_MS}ms`);
+  setInterval(async () => {
+    if (PIPELINE_LOCK) {
+      console.log("[scheduler] skip: pipeline already running");
+      return;
+    }
+    console.log("[scheduler] starting pipeline...");
+    const r = await runPipeline("scheduler");
+    console.log(r.ok ? "[scheduler] pipeline OK" : "[scheduler] pipeline FAILED");
+  }, SCHEDULER_INTERVAL_MS);
 }
 
+// ---- start ----
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  if (scheduler.enabled) {
-    console.log(`[scheduler] enabled, interval ${scheduler.intervalMs}ms`);
-    scheduler.timer = setInterval(schedulerTick, scheduler.intervalMs);
-  }
 });

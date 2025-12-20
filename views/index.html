@@ -5,165 +5,135 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>fearporn.world</title>
   <link rel="stylesheet" href="/style.css" />
+  <script src="/theme.js" defer></script>
 </head>
-
 <body>
-  <header class="header-row">
+  <header class="site-header">
     <div class="header-inner">
-      <div class="header-top">
-        <div>
-          <div class="tagline">bringing out the worst humanity has to offer</div>
-          <h1 style="margin:0; line-height:1;">
-            fearporn.<span style="color:#cc4f00;">world</span>
+      <div class="header-row">
+        <div class="brand-wrap">
+          <h1 class="brand">
+            fearporn<span class="brand-world">.world</span>
           </h1>
+          <p class="tagline">bringing out the worst humanity has to offer</p>
         </div>
 
-        <button id="themeToggle" class="theme-toggle" type="button" aria-label="Toggle theme">
-          <span class="theme-icon">☾</span>
+        <button id="themeToggle" class="theme-btn" type="button" aria-label="Toggle theme">
+          <span class="theme-icon">🌓</span>
           <span class="theme-label">Theme</span>
         </button>
       </div>
     </div>
   </header>
 
-  <main>
+  <main class="wrap">
     <div id="articles"></div>
-    <div class="pager" id="pager" style="text-align:center;"></div>
+
+    <nav class="pagination" aria-label="Pagination">
+      <button id="prevBtn" class="page-btn" type="button">← Prev</button>
+      <span id="pageInfo" class="page-info"></span>
+      <button id="nextBtn" class="page-btn" type="button">Next →</button>
+    </nav>
   </main>
 
-  <script src="/theme.js"></script>
-  <script>
-    const PAGE_SIZE = 10;
+<script>
+(() => {
+  const PAGE_SIZE = 10;
+  const qs = new URLSearchParams(window.location.search);
+  let page = Math.max(1, parseInt(qs.get("page") || "1", 10));
 
-    function esc(s) {
-      return String(s || "")
-        .replaceAll("&","&amp;")
-        .replaceAll("<","&lt;")
-        .replaceAll(">","&gt;")
-        .replaceAll('"',"&quot;")
-        .replaceAll("'","&#039;");
+  const articlesEl = document.getElementById("articles");
+  const prevBtn = document.getElementById("prevBtn");
+  const nextBtn = document.getElementById("nextBtn");
+  const pageInfo = document.getElementById("pageInfo");
+
+  function stripTrailingSource(text) {
+    if (!text) return "";
+    const lines = text.replace(/\r\n/g, "\n").split("\n");
+    while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+    while (lines.length && /^source\s*:/i.test(lines[lines.length - 1].trim())) {
+      lines.pop();
+      while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+    }
+    return lines.join("\n").trim();
+  }
+
+  function renderArticles(items) {
+    articlesEl.innerHTML = "";
+    if (!items || !items.length) {
+      articlesEl.innerHTML = '<div class="card"><p>No articles yet.</p></div>';
+      return;
     }
 
-    function getPage() {
-      const p = parseInt(new URLSearchParams(location.search).get("page") || "1", 10);
-      return Number.isFinite(p) && p > 0 ? p : 1;
-    }
+    for (const a of items) {
+      const card = document.createElement("article");
+      card.className = "card";
 
-    function setPage(p) {
-      const url = new URL(location.href);
-      url.searchParams.set("page", String(p));
-      location.href = url.toString();
-    }
+      const title = document.createElement("h3");
+      title.className = "article-title";
+      title.textContent = a.title || "(untitled)";
+      card.appendChild(title);
 
-    function renderArticles(items) {
-      const el = document.getElementById("articles");
-      el.innerHTML = "";
-
-      for (const a of items) {
-        const card = document.createElement("section");
-        card.className = "card";
-
-        const title = document.createElement("div");
-        title.className = "title";
-        title.textContent = a.title || "(untitled)";
-        card.appendChild(title);
-
-        if (a.published_at || a.created_at || a.category) {
-          const meta = document.createElement("div");
-          meta.className = "meta";
-
-          const parts = [];
-          if (a.category) parts.push(esc(a.category));
-          if (a.published_at) parts.push(new Date(a.published_at).toLocaleString());
-          else if (a.created_at) parts.push(esc(a.created_at));
-
-          meta.innerHTML = parts.join(" · ");
-          card.appendChild(meta);
-        }
-
-        const summary = document.createElement("div");
-        summary.className = "summary";
-        summary.textContent = a.summary || "";
-        card.appendChild(summary);
-
-        const src = document.createElement("div");
-        src.className = "source";
-        const href = a.source_url || a.url;
-        const label = a.source_domain || a.source_name || "source";
-        src.innerHTML = `Source: <a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`;
-        card.appendChild(src);
-
-        el.appendChild(card);
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      if (a.published_at) {
+        try { meta.textContent = new Date(a.published_at).toLocaleString(); } catch {}
       }
+      card.appendChild(meta);
+
+      const summary = document.createElement("pre");
+      summary.className = "summary";
+      summary.textContent = stripTrailingSource(a.summary || "");
+      card.appendChild(summary);
+
+      const source = document.createElement("div");
+      source.className = "source-line";
+      const domain = a.source_domain || a.source_name || "source";
+
+      const link = document.createElement("a");
+      link.href = a.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = domain;
+
+      source.appendChild(document.createTextNode("Source: "));
+      source.appendChild(link);
+      card.appendChild(source);
+
+      articlesEl.appendChild(card);
     }
+  }
 
-    function renderPager(page, pages) {
-      const pager = document.getElementById("pager");
-      pager.innerHTML = "";
+  async function load() {
+    const offset = (page - 1) * PAGE_SIZE;
 
-      if (pages <= 1) return;
+    pageInfo.textContent = `Page ${page}`;
+    prevBtn.disabled = page <= 1;
+    nextBtn.disabled = true;
 
-      function addLink(text, p, active = false) {
-        if (active) {
-          const b = document.createElement("b");
-          b.textContent = text;
-          pager.appendChild(b);
-          return;
-        }
-        const a = document.createElement("a");
-        a.href = "javascript:void(0)";
-        a.textContent = text;
-        a.onclick = () => setPage(p);
-        pager.appendChild(a);
-      }
+    const res = await fetch(`/api/articles?limit=${PAGE_SIZE}&offset=${offset}`);
+    const items = await res.json();
 
-      // Prev
-      if (page > 1) addLink("‹ Prev", page - 1);
+    renderArticles(items);
+    nextBtn.disabled = !items || items.length < PAGE_SIZE;
+  }
 
-      // show a compact window around current page
-      const windowSize = 7;
-      let start = Math.max(1, page - Math.floor(windowSize / 2));
-      let end = Math.min(pages, start + windowSize - 1);
-      start = Math.max(1, end - windowSize + 1);
+  prevBtn.addEventListener("click", () => {
+    if (page <= 1) return;
+    page -= 1;
+    window.location.search = `?page=${page}`;
+  });
 
-      if (start > 1) {
-        addLink("1", 1, page === 1);
-        if (start > 2) {
-          const dots = document.createElement("b");
-          dots.textContent = "…";
-          pager.appendChild(dots);
-        }
-      }
+  nextBtn.addEventListener("click", () => {
+    page += 1;
+    window.location.search = `?page=${page}`;
+  });
 
-      for (let p = start; p <= end; p++) addLink(String(p), p, p === page);
-
-      if (end < pages) {
-        if (end < pages - 1) {
-          const dots = document.createElement("b");
-          dots.textContent = "…";
-          pager.appendChild(dots);
-        }
-        addLink(String(pages), pages, page === pages);
-      }
-
-      // Next
-      if (page < pages) addLink("Next ›", page + 1);
-    }
-
-    async function load() {
-      const page = getPage();
-      const res = await fetch(`/api/articles?page=${page}&limit=${PAGE_SIZE}`);
-      const data = await res.json();
-
-      // expected: { items, total, page, pages, limit }
-      renderArticles(data.items || []);
-      renderPager(data.page || page, data.pages || 1);
-    }
-
-    load().catch(err => {
-      document.getElementById("articles").innerHTML =
-        `<div class="card"><div class="title">Error</div><div class="summary">${esc(err.message || err)}</div></div>`;
-    });
-  </script>
+  load().catch(err => {
+    articlesEl.innerHTML = '<div class="card"><p>Failed to load articles.</p></div>';
+    console.error(err);
+  });
+})();
+</script>
 </body>
 </html>
