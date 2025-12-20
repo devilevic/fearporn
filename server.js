@@ -1,288 +1,221 @@
 // server.js
 require("dotenv").config();
 
-const path = require("path");
 const express = require("express");
+const path = require("path");
 const { spawn } = require("child_process");
 
-const db = require("./src/db");
+const { db, DB_PATH } = require("./src/db");
 
 const app = express();
 
 /* -------------------- Static assets -------------------- */
 app.use(express.static(path.join(__dirname, "public")));
-app.use("/public", express.static(path.join(__dirname, "public")));
 
-/* -------------------- Helpers: schema-safe selects -------------------- */
-let _articlesColsCache = null;
-
-function getArticlesColumns() {
-  if (_articlesColsCache) return _articlesColsCache;
-  const cols = db
-    .prepare("PRAGMA table_info(articles)")
-    .all()
-    .map((r) => r.name);
-  _articlesColsCache = new Set(cols);
-  return _articlesColsCache;
+/* -------------------- Helpers -------------------- */
+function nowIso() {
+  return new Date().toISOString();
 }
 
-function hasCol(name) {
-  return getArticlesColumns().has(name);
+function requireAdmin(req, res) {
+  const token = req.query.token || req.get("x-admin-token");
+  if (!process.env.ADMIN_TOKEN || token !== process.env.ADMIN_TOKEN) {
+    res.status(401).json({ ok: false, error: "Unauthorized" });
+    return false;
+  }
+  return true;
 }
 
-function pickCols(preferred) {
-  const set = getArticlesColumns();
-  return preferred.filter((c) => set.has(c));
-}
+function runScript(scriptPath, label, timeoutMs = 8 * 60 * 1000) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [scriptPath], {
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
 
-function bestOrderBy() {
-  // Prefer "created_at" (published on fearporn), otherwise feed time, otherwise id
-  if (hasCol("created_at")) return "created_at DESC";
-  if (hasCol("published_at")) return "published_at DESC";
-  return "id DESC";
-}
+    let stdout = "";
+    let stderr = "";
+    const startedAt = Date.now();
 
-/* -------------------- Pipeline runner (NON-BLOCKING, self-healing lock) -------------------- */
-let pipelineRunning = false;
-let pipelineChild = null;
-let pipelineStartedAt = null;
+    const killTimer = setTimeout(() => {
+      stderr += `\n[pipeline:${label}] timeout after ${timeoutMs}ms -> killing child\n`;
+      child.kill("SIGKILL");
+    }, timeoutMs);
 
-function runPipelineAsync(label = "manual") {
-  if (pipelineRunning) return { ok: false, reason: "pipeline already running" };
+    child.stdout.on("data", (d) => (stdout += d.toString()));
+    child.stderr.on("data", (d) => (stderr += d.toString()));
 
-  pipelineRunning = true;
-  pipelineStartedAt = Date.now();
-
-  pipelineChild = spawn(
-    "bash",
-    ["-lc", "node scripts/ingest.js && node scripts/summarize_batch.js"],
-    { cwd: __dirname, stdio: ["ignore", "pipe", "pipe"] }
-  );
-
-  pipelineChild.stdout.on("data", (d) => process.stdout.write(`[pipeline:${label}] ${d}`));
-  pipelineChild.stderr.on("data", (d) => process.stderr.write(`[pipeline:${label}] ${d}`));
-
-  pipelineChild.on("close", (code) => {
-    pipelineRunning = false;
-    pipelineChild = null;
-    pipelineStartedAt = null;
-    console.log(`[pipeline:${label}] exit code ${code}`);
+    child.on("close", (code) => {
+      clearTimeout(killTimer);
+      resolve({
+        label,
+        code,
+        ms: Date.now() - startedAt,
+        stdout,
+        stderr,
+      });
+    });
   });
-
-  // Safety: kill after 30 minutes AND release lock even if "close" never fires.
-  setTimeout(() => {
-    if (!pipelineRunning) return;
-    console.error(`[pipeline:${label}] timeout -> killing child and releasing lock`);
-
-    try {
-      if (pipelineChild) pipelineChild.kill("SIGKILL");
-    } catch {}
-
-    pipelineRunning = false;
-    pipelineChild = null;
-    pipelineStartedAt = null;
-  }, 30 * 60 * 1000);
-
-  return { ok: true };
 }
 
-/* -------------------- Health / debug -------------------- */
-app.get("/_version", (req, res) => {
-  res.type("text").send("VERSION 2025-12-19 server.js + scheduler + admin");
-});
+/* -------------------- Pipeline state / lock -------------------- */
+const pipeline = {
+  running: false,
+  startedAt: null,
+  lastRunAt: null,
+  lastResult: null,
+};
 
-app.get("/_debug", (req, res) => {
+async function runPipeline(reason = "manual") {
+  if (pipeline.running) {
+    return { ok: false, reason: "pipeline already running" };
+  }
+
+  pipeline.running = true;
+  pipeline.startedAt = Date.now();
+
   try {
-    const cols = Array.from(getArticlesColumns());
-
-    const total = db.prepare("SELECT COUNT(*) AS c FROM articles").get().c;
-
-    // summary column should exist; if not, we degrade gracefully
-    let summarized = 0;
-    let unsummarized = total;
-
-    if (hasCol("summary")) {
-      summarized = db
-        .prepare("SELECT COUNT(*) AS c FROM articles WHERE summary IS NOT NULL AND summary != ''")
-        .get().c;
-      unsummarized = db
-        .prepare("SELECT COUNT(*) AS c FROM articles WHERE summary IS NULL OR summary = ''")
-        .get().c;
+    const ingest = await runScript("scripts/ingest.js", `${reason}:ingest`, 6 * 60 * 1000);
+    if (ingest.code !== 0) {
+      pipeline.lastResult = { ok: false, step: "ingest", ingest, at: nowIso() };
+      return pipeline.lastResult;
     }
 
-    res.json({
-      ok: true,
-      db_path: process.env.DB_PATH || null,
-      columns: cols,
-      total,
-      summarized,
-      unsummarized,
-      pipeline: {
-        running: pipelineRunning,
-        pid: pipelineChild?.pid || null,
-        startedAt: pipelineStartedAt,
-      },
-      scheduler: {
-        enabled: process.env.ENABLE_SCHEDULER === "true",
-        interval_ms: Number(process.env.SCHEDULER_INTERVAL_MS || 1800000),
-      },
-    });
-  } catch (e) {
-    res.json({ ok: false, error: e?.message || String(e) });
+    const summarize = await runScript(
+      "scripts/summarize_batch.js",
+      `${reason}:summarize`,
+      10 * 60 * 1000
+    );
+    if (summarize.code !== 0) {
+      pipeline.lastResult = { ok: false, step: "summarize", summarize, at: nowIso() };
+      return pipeline.lastResult;
+    }
+
+    pipeline.lastResult = { ok: true, at: nowIso(), ingest, summarize };
+    return pipeline.lastResult;
+  } finally {
+    pipeline.running = false;
+    pipeline.lastRunAt = Date.now();
   }
-});
+}
 
 /* -------------------- Pages -------------------- */
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "views", "index.html"));
 });
 
-app.get("/article/:id", (req, res) => {
-  res.sendFile(path.join(__dirname, "views", "article.html"));
-});
-
 /* -------------------- API -------------------- */
 app.get("/api/articles", (req, res) => {
   try {
-    // Use only columns that actually exist to avoid "no such column" crashes
-    const cols = pickCols([
-      "id",
-      "title",
-      "url",
-      "category",
-      "published_at",
-      "created_at",
-      "summary",
-      "source_domain",
-    ]);
+    // Only show summarized articles
+    const rows = db
+      .prepare(
+        `
+        SELECT id, title, url, category, published_at, created_at, summary, source_domain, source_name
+        FROM articles
+        WHERE summary IS NOT NULL AND summary != ''
+        ORDER BY datetime(created_at) DESC
+        LIMIT 200
+      `
+      )
+      .all();
 
-    if (!cols.includes("id") || !cols.includes("title")) {
-      return res.status(500).json({ error: "articles table missing required columns (id/title)" });
-    }
-
-    const whereSummary = hasCol("summary")
-      ? "WHERE summary IS NOT NULL AND summary != ''"
-      : "";
-
-    const sql = `
-      SELECT ${cols.join(", ")}
-      FROM articles
-      ${whereSummary}
-      ORDER BY ${bestOrderBy()}
-      LIMIT 100
-    `;
-
-    const rows = db.prepare(sql).all();
     res.json(rows);
   } catch (e) {
-    res.status(500).json({ error: e?.message || String(e) });
+    res.status(500).json({ error: e.message });
   }
 });
 
-app.get("/api/articles/:id", (req, res) => {
+/* -------------------- Health / debug -------------------- */
+app.get("/_version", (req, res) => {
+  res.type("text").send("VERSION 2025-12-20 server.js + scheduler + async pipeline");
+});
+
+app.get("/_debug", (req, res) => {
   try {
-    const cols = pickCols([
-      "id",
-      "title",
-      "url",
-      "category",
-      "published_at",
-      "created_at",
-      "summary",
-      "source_domain",
-    ]);
+    const total = db.prepare("SELECT COUNT(*) AS c FROM articles").get().c;
+    const summarized = db
+      .prepare("SELECT COUNT(*) AS c FROM articles WHERE summary IS NOT NULL AND summary != ''")
+      .get().c;
+    const unsummarized = db
+      .prepare("SELECT COUNT(*) AS c FROM articles WHERE summary IS NULL OR summary = ''")
+      .get().c;
 
-    const sql = `
-      SELECT ${cols.join(", ")}
-      FROM articles
-      WHERE id = ?
-      LIMIT 1
-    `;
+    // columns info
+    const cols = db.prepare("PRAGMA table_info(articles)").all().map((r) => r.name);
 
-    const row = db.prepare(sql).get(req.params.id);
-    if (!row) return res.status(404).send("Not found");
-    if (hasCol("summary") && (!row.summary || row.summary === "")) return res.status(404).send("Not found");
-
-    res.json(row);
+    res.json({
+      ok: true,
+      db_path: process.env.DB_PATH || DB_PATH,
+      columns: cols,
+      total,
+      summarized,
+      unsummarized,
+      pipeline: {
+        running: pipeline.running,
+        startedAt: pipeline.startedAt,
+        lastRunAt: pipeline.lastRunAt,
+        lastResultOk: pipeline.lastResult?.ok ?? null,
+      },
+      scheduler: {
+        enabled: (process.env.SCHEDULER_ENABLED || "true") === "true",
+        interval_ms: parseInt(process.env.SCHEDULER_INTERVAL_MS || "1800000", 10),
+      },
+    });
   } catch (e) {
-    res.status(500).json({ error: e?.message || String(e) });
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
-/* -------------------- Admin endpoints (optional) -------------------- */
-if (process.env.ENABLE_ADMIN_RUN === "true") {
-  const auth = (req, res) => {
-    const token = req.query.token || req.get("x-admin-token");
-    if (!process.env.ADMIN_TOKEN || token !== process.env.ADMIN_TOKEN) {
-      res.status(401).send("Unauthorized");
-      return false;
-    }
-    return true;
-  };
+/* -------------------- Admin -------------------- */
+app.get("/admin/run", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
 
-  app.get("/admin/run", (req, res) => {
-    if (!auth(req, res)) return;
+  if (pipeline.running) {
+    return res.status(409).json({ ok: false, reason: "pipeline already running" });
+  }
 
-    const started = runPipelineAsync("admin");
-    if (!started.ok) return res.status(409).json(started);
+  // start in background, return immediately
+  runPipeline("admin").catch(() => {});
+  res.json({ ok: true, started: true });
+});
 
-    // return immediately (non-blocking)
-    res.json({ ok: true, started: true });
+app.get("/admin/status", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+
+  res.json({
+    pipelineRunning: pipeline.running,
+    startedAt: pipeline.startedAt,
+    lastRunAt: pipeline.lastRunAt,
+    lastResult: pipeline.lastResult,
   });
+});
 
-  app.get("/admin/status", (req, res) => {
-    if (!auth(req, res)) return;
-    res.json({
-      pipelineRunning,
-      pid: pipelineChild?.pid || null,
-      startedAt: pipelineStartedAt,
-    });
-  });
+app.get("/admin/reset", (req, res) => {
+  if (!requireAdmin(req, res)) return;
 
-  app.get("/admin/reset", (req, res) => {
-    if (!auth(req, res)) return;
-    pipelineRunning = false;
-    pipelineChild = null;
-    pipelineStartedAt = null;
-    res.json({ ok: true, reset: true });
-  });
-}
+  // only resets the in-memory lock/state (does not touch DB)
+  pipeline.running = false;
+  pipeline.startedAt = null;
+
+  res.json({ ok: true, reset: true });
+});
 
 /* -------------------- Scheduler -------------------- */
-let schedulerTickRunning = false;
+const schedulerEnabled = (process.env.SCHEDULER_ENABLED || "true") === "true";
+const schedulerIntervalMs = parseInt(process.env.SCHEDULER_INTERVAL_MS || "1800000", 10);
 
-function startScheduler() {
-  const enabled = process.env.ENABLE_SCHEDULER === "true";
-  if (!enabled) return;
-
-  const intervalMs = Number(process.env.SCHEDULER_INTERVAL_MS || 1800000); // 30 min default
-  console.log(`[scheduler] enabled, interval ${intervalMs}ms`);
-
-  const tick = () => {
-    if (schedulerTickRunning) {
-      console.log("[scheduler] previous tick still active, skipping");
-      return;
-    }
-    schedulerTickRunning = true;
-
-    try {
-      console.log("[scheduler] starting pipeline...");
-      const started = runPipelineAsync("scheduler");
-      if (!started.ok) console.log(`[scheduler] skip: ${started.reason}`);
-    } catch (e) {
-      console.error("[scheduler] error:", e?.message || e);
-    } finally {
-      schedulerTickRunning = false;
-    }
-  };
-
-  setTimeout(tick, 5000);
-  setInterval(tick, intervalMs);
+if (schedulerEnabled) {
+  console.log(`[scheduler] enabled, interval ${schedulerIntervalMs}ms`);
+  setInterval(() => {
+    if (pipeline.running) return;
+    runPipeline("scheduler").catch(() => {});
+  }, schedulerIntervalMs);
 }
 
 /* -------------------- Start server -------------------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  startScheduler();
 });
