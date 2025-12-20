@@ -1,103 +1,125 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>fearporn.world</title>
-  <link rel="stylesheet" href="/style.css" />
-</head>
+<link rel="stylesheet" href="/public/style.css" />
 
-<body class="theme-dark">
-  <header>
-    <div class="header-inner">
-      <div class="header-row">
+<div id="feed"></div>
+<div id="pager" class="pager"></div>
 
-        <!-- 🔽 ONLY CHANGE: wrapper added -->
-        <div class="brand-block">
-          <div class="brand">
-            fearporn<span class="brand-dot">.world</span>
-          </div>
-          <div class="tagline">
-            bringing out the worst humanity has to offer
-          </div>
-        </div>
-        <!-- 🔼 END change -->
+<script>
+  const PAGE_SIZE = 10;
+  let ALL = [];
 
-        <button id="themeToggle" class="theme-toggle" type="button">
-          <span class="theme-icon">🌙</span>
-          <span class="theme-label">Dark</span>
-        </button>
+  function getPageFromUrl() {
+    const url = new URL(window.location.href);
+    const p = parseInt(url.searchParams.get("page") || "1", 10);
+    return Number.isFinite(p) && p > 0 ? p : 1;
+  }
 
-      </div>
-    </div>
-  </header>
+  function setPageInUrl(page) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("page", String(page));
+    window.history.pushState({}, "", url);
+  }
 
-  <main class="wrap">
-    <div id="feed"></div>
-  </main>
+  function escapeHtml(s) {
+    return String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
 
-  <script src="/theme.js"></script>
-  <script>
-    function escapeHtml(s){
-      return String(s||"")
-        .replaceAll("&","&amp;")
-        .replaceAll("<","&lt;")
-        .replaceAll(">","&gt;")
-        .replaceAll('"',"&quot;")
-        .replaceAll("'","&#39;");
+  function renderPage(page) {
+    const total = ALL.length;
+    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    const safePage = Math.min(Math.max(1, page), totalPages);
+
+    const start = (safePage - 1) * PAGE_SIZE;
+    const slice = ALL.slice(start, start + PAGE_SIZE);
+
+    const feed = document.getElementById("feed");
+    feed.innerHTML = slice
+      .map(
+        (a) => `
+        <article class="post">
+          <h2 class="title">${escapeHtml(a.title)}</h2>
+          <div class="summary">${escapeHtml(a.summary)}</div>
+        </article>
+      `
+      )
+      .join("");
+
+    renderPager(safePage, totalPages);
+  }
+
+  function renderPager(page, totalPages) {
+    const pager = document.getElementById("pager");
+    if (!pager) return;
+
+    // If only 1 page, hide pager
+    if (totalPages <= 1) {
+      pager.innerHTML = "";
+      return;
     }
 
-    function formatStamp(article){
-      const cat = (article.category || "news").toLowerCase();
-      const dt = article.summarized_at || article.created_at || article.published_at;
-      if(!dt) return cat;
+    // Window of page numbers
+    const windowSize = 7;
+    let start = Math.max(1, page - Math.floor(windowSize / 2));
+    let end = Math.min(totalPages, start + windowSize - 1);
+    start = Math.max(1, end - windowSize + 1);
 
-      const d = new Date(dt);
-      const opts = { month:"short", day:"2-digit" };
-      const datePart = d.toLocaleDateString("en-US", opts);
-      const hh = String(d.getHours()).padStart(2,"0");
-      const mm = String(d.getMinutes()).padStart(2,"0");
-      return `${cat} \u2022 ${datePart}, ${hh}:${mm}`;
+    const parts = [];
+
+    const btn = (label, p, disabled = false, active = false) => `
+      <button
+        class="page-btn ${active ? "active" : ""}"
+        data-page="${p}"
+        ${disabled ? "disabled" : ""}
+        aria-current="${active ? "page" : "false"}"
+      >${label}</button>
+    `;
+
+    parts.push(btn("Prev", page - 1, page === 1));
+
+    if (start > 1) {
+      parts.push(btn("1", 1, false, page === 1));
+      if (start > 2) parts.push(`<span class="page-ellipsis">…</span>`);
     }
 
-    async function load(){
-      const el = document.getElementById("feed");
-      el.innerHTML = "";
-
-      const res = await fetch(`/api/articles?ts=${Date.now()}`, { cache: "no-store" });
-      const data = await res.json();
-
-      if(!Array.isArray(data) || data.length === 0){
-        el.innerHTML = `<div class="card"><div class="meta">No summarized articles yet.</div></div>`;
-        return;
-      }
-
-      for(const a of data){
-        const domain = a.source_domain
-          ? a.source_domain
-          : (new URL(a.url)).hostname.replace(/^www\./,"");
-
-        const meta = formatStamp(a);
-
-        el.insertAdjacentHTML("beforeend", `
-          <article class="card">
-            <div class="meta">
-              <span class="pill">${escapeHtml(meta)}</span>
-            </div>
-            <div class="title">${escapeHtml(a.title)}</div>
-            <p class="summary">${escapeHtml(a.summary)}</p>
-            <div class="source">
-              Source:
-              <a href="${escapeHtml(a.url)}" target="_blank" rel="noopener noreferrer">
-                ${escapeHtml(domain)}
-              </a>
-            </div>
-          </article>
-        `);
-      }
+    for (let p = start; p <= end; p++) {
+      parts.push(btn(String(p), p, false, p === page));
     }
 
-    load();
-  </script>
-</body>
-</html>
+    if (end < totalPages) {
+      if (end < totalPages - 1) parts.push(`<span class="page-ellipsis">…</span>`);
+      parts.push(btn(String(totalPages), totalPages, false, page === totalPages));
+    }
+
+    parts.push(btn("Next", page + 1, page === totalPages));
+
+    pager.innerHTML = parts.join("");
+
+    pager.querySelectorAll("button[data-page]").forEach((b) => {
+      b.addEventListener("click", () => {
+        const p = parseInt(b.getAttribute("data-page"), 10);
+        if (!Number.isFinite(p)) return;
+        setPageInUrl(p);
+        renderPage(p);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
+    });
+  }
+
+  async function load() {
+    // Ask for more than 10 so we can paginate client-side.
+    const res = await fetch("/api/articles?limit=200");
+    ALL = await res.json();
+
+    renderPage(getPageFromUrl());
+  }
+
+  window.addEventListener("popstate", () => {
+    renderPage(getPageFromUrl());
+  });
+
+  load();
+</script>
