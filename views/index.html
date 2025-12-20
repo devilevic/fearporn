@@ -1,203 +1,169 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>fearporn.world</title>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>fearporn.world</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
 
-    <!-- CSS is served at root -->
-    <link rel="stylesheet" href="/style.css" />
-  </head>
-
-  <body>
-    <header>
-      <div class="header-inner">
-        <div class="header-row">
-          <div class="brand-wrap">
-            <div class="brand">
-              fearporn<span class="brand-dot">.</span>world
-            </div>
-            <div class="tagline">bringing out the worst humanity has to offer</div>
-          </div>
-
-          <!-- Theme toggle on the right, same row -->
-          <button id="themeToggle" class="theme-toggle" type="button" aria-label="Toggle theme">
-            <span id="themeIcon" class="theme-icon">🌙</span>
-            <span id="themeLabel" class="theme-label">DARK</span>
-          </button>
+<body>
+  <header class="header-row">
+    <div class="header-inner">
+      <div class="header-top">
+        <div>
+          <div class="tagline">bringing out the worst humanity has to offer</div>
+          <h1 style="margin:0; line-height:1;">
+            fearporn.<span style="color:#cc4f00;">world</span>
+          </h1>
         </div>
+
+        <button id="themeToggle" class="theme-toggle" type="button" aria-label="Toggle theme">
+          <span class="theme-icon">☾</span>
+          <span class="theme-label">Theme</span>
+        </button>
       </div>
-    </header>
+    </div>
+  </header>
 
-    <main class="wrap">
-      <div id="articles"></div>
-      <nav class="pagination" id="pagination"></nav>
-    </main>
+  <main>
+    <div id="articles"></div>
+    <div class="pager" id="pager" style="text-align:center;"></div>
+  </main>
 
-    <!-- Your theme script -->
-    <script src="/theme.js"></script>
+  <script src="/theme.js"></script>
+  <script>
+    const PAGE_SIZE = 10;
 
-    <script>
-      const PAGE_SIZE = 10;
+    function esc(s) {
+      return String(s || "")
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#039;");
+    }
 
-      function escapeHtml(str) {
-        return String(str ?? "")
-          .replaceAll("&", "&amp;")
-          .replaceAll("<", "&lt;")
-          .replaceAll(">", "&gt;")
-          .replaceAll('"', "&quot;")
-          .replaceAll("'", "&#039;");
+    function getPage() {
+      const p = parseInt(new URLSearchParams(location.search).get("page") || "1", 10);
+      return Number.isFinite(p) && p > 0 ? p : 1;
+    }
+
+    function setPage(p) {
+      const url = new URL(location.href);
+      url.searchParams.set("page", String(p));
+      location.href = url.toString();
+    }
+
+    function renderArticles(items) {
+      const el = document.getElementById("articles");
+      el.innerHTML = "";
+
+      for (const a of items) {
+        const card = document.createElement("section");
+        card.className = "card";
+
+        const title = document.createElement("div");
+        title.className = "title";
+        title.textContent = a.title || "(untitled)";
+        card.appendChild(title);
+
+        if (a.published_at || a.created_at || a.category) {
+          const meta = document.createElement("div");
+          meta.className = "meta";
+
+          const parts = [];
+          if (a.category) parts.push(esc(a.category));
+          if (a.published_at) parts.push(new Date(a.published_at).toLocaleString());
+          else if (a.created_at) parts.push(esc(a.created_at));
+
+          meta.innerHTML = parts.join(" · ");
+          card.appendChild(meta);
+        }
+
+        const summary = document.createElement("div");
+        summary.className = "summary";
+        summary.textContent = a.summary || "";
+        card.appendChild(summary);
+
+        const src = document.createElement("div");
+        src.className = "source";
+        const href = a.source_url || a.url;
+        const label = a.source_domain || a.source_name || "source";
+        src.innerHTML = `Source: <a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`;
+        card.appendChild(src);
+
+        el.appendChild(card);
+      }
+    }
+
+    function renderPager(page, pages) {
+      const pager = document.getElementById("pager");
+      pager.innerHTML = "";
+
+      if (pages <= 1) return;
+
+      function addLink(text, p, active = false) {
+        if (active) {
+          const b = document.createElement("b");
+          b.textContent = text;
+          pager.appendChild(b);
+          return;
+        }
+        const a = document.createElement("a");
+        a.href = "javascript:void(0)";
+        a.textContent = text;
+        a.onclick = () => setPage(p);
+        pager.appendChild(a);
       }
 
-      // ✅ Removes the *extra* "Source: ..." lines that the model may have printed inside the summary
-      // while keeping the dedicated bottom source line (rendered separately).
-      function stripInlineSources(summary) {
-        let s = String(summary ?? "");
+      // Prev
+      if (page > 1) addLink("‹ Prev", page - 1);
 
-        // remove lines that start with "Source:" (case-insensitive), allowing leading spaces
-        s = s.replace(/^\s*Source:\s*.*$/gmi, "");
+      // show a compact window around current page
+      const windowSize = 7;
+      let start = Math.max(1, page - Math.floor(windowSize / 2));
+      let end = Math.min(pages, start + windowSize - 1);
+      start = Math.max(1, end - windowSize + 1);
 
-        // collapse excessive blank lines caused by removals
-        s = s.replace(/\n{3,}/g, "\n\n").trim();
-
-        return s;
-      }
-
-      function formatDate(iso) {
-        if (!iso) return "";
-        try {
-          const d = new Date(iso);
-          if (isNaN(d.getTime())) return iso;
-          return d.toISOString().slice(0, 19).replace("T", " ");
-        } catch {
-          return iso;
+      if (start > 1) {
+        addLink("1", 1, page === 1);
+        if (start > 2) {
+          const dots = document.createElement("b");
+          dots.textContent = "…";
+          pager.appendChild(dots);
         }
       }
 
-      async function fetchArticles(page) {
-        const offset = (page - 1) * PAGE_SIZE;
-        const res = await fetch(`/api/articles?limit=${PAGE_SIZE}&offset=${offset}`);
-        if (!res.ok) throw new Error(`API error: ${res.status}`);
-        return await res.json();
-      }
+      for (let p = start; p <= end; p++) addLink(String(p), p, p === page);
 
-      async function fetchTotal() {
-        const res = await fetch("/_debug");
-        if (!res.ok) return null;
-        const data = await res.json();
-        // paginate summarized articles only
-        return data?.summarized ?? null;
-      }
-
-      function renderArticles(rows) {
-        const root = document.getElementById("articles");
-        root.innerHTML = "";
-
-        for (const a of rows) {
-          const category = escapeHtml(a.category || "world");
-          const ts = escapeHtml(formatDate(a.summarized_at || a.created_at || a.published_at));
-          const title = escapeHtml(a.title || "");
-          const summaryClean = stripInlineSources(a.summary || "");
-          const summaryHtml = escapeHtml(summaryClean).replace(/\n/g, "<br/>");
-
-          const sourceDomain = escapeHtml(a.source_domain || "");
-          const url = a.url || "";
-
-          const card = document.createElement("article");
-          card.className = "card";
-
-          card.innerHTML = `
-            <div class="meta">
-              <span class="pill">${category}</span>
-              <span class="dotsep">•</span>
-              <span class="ts">${ts}</span>
-            </div>
-
-            <h2 class="title">${title}</h2>
-
-            <div class="summary">${summaryHtml}</div>
-
-            <div class="source">
-              Source: <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${sourceDomain}</a>
-            </div>
-          `;
-
-          root.appendChild(card);
+      if (end < pages) {
+        if (end < pages - 1) {
+          const dots = document.createElement("b");
+          dots.textContent = "…";
+          pager.appendChild(dots);
         }
+        addLink(String(pages), pages, page === pages);
       }
 
-      function renderPagination(currentPage, totalPages) {
-        const nav = document.getElementById("pagination");
-        nav.innerHTML = "";
+      // Next
+      if (page < pages) addLink("Next ›", page + 1);
+    }
 
-        if (!totalPages || totalPages <= 1) return;
+    async function load() {
+      const page = getPage();
+      const res = await fetch(`/api/articles?page=${page}&limit=${PAGE_SIZE}`);
+      const data = await res.json();
 
-        const makeBtn = (label, page, disabled = false, active = false) => {
-          const btn = document.createElement("button");
-          btn.type = "button";
-          btn.textContent = label;
-          btn.className = active ? "page-btn active" : "page-btn";
-          btn.disabled = disabled;
-          btn.addEventListener("click", () => setPage(page));
-          return btn;
-        };
+      // expected: { items, total, page, pages, limit }
+      renderArticles(data.items || []);
+      renderPager(data.page || page, data.pages || 1);
+    }
 
-        nav.appendChild(makeBtn("Prev", Math.max(1, currentPage - 1), currentPage === 1));
-
-        // compact pagination: 1 … 3 4 5 … N
-        const pages = [];
-        pages.push(1);
-        for (let p = currentPage - 2; p <= currentPage + 2; p++) {
-          if (p > 1 && p < totalPages) pages.push(p);
-        }
-        if (totalPages > 1) pages.push(totalPages);
-
-        const unique = [...new Set(pages)].sort((a, b) => a - b);
-
-        let last = 0;
-        for (const p of unique) {
-          if (p - last > 1) {
-            const span = document.createElement("span");
-            span.className = "ellipsis";
-            span.textContent = "…";
-            nav.appendChild(span);
-          }
-          nav.appendChild(makeBtn(String(p), p, false, p === currentPage));
-          last = p;
-        }
-
-        nav.appendChild(makeBtn("Next", Math.min(totalPages, currentPage + 1), currentPage === totalPages));
-      }
-
-      async function setPage(page) {
-        const rows = await fetchArticles(page);
-        renderArticles(rows);
-
-        const totalSummarized = await fetchTotal();
-        if (totalSummarized != null) {
-          const totalPages = Math.max(1, Math.ceil(totalSummarized / PAGE_SIZE));
-          renderPagination(page, totalPages);
-        }
-      }
-
-      function syncThemeButton() {
-        const t = localStorage.getItem("theme") || document.documentElement.dataset.theme || "dark";
-        const isDark = (t === "dark");
-
-        document.getElementById("themeIcon").textContent = isDark ? "🌙" : "☀️";
-        document.getElementById("themeLabel").textContent = isDark ? "DARK" : "LIGHT";
-      }
-
-      document.getElementById("themeToggle").addEventListener("click", () => {
-        const current = localStorage.getItem("theme") || "dark";
-        const next = (current === "dark") ? "light" : "dark";
-        localStorage.setItem("theme", next);
-        document.documentElement.dataset.theme = next;
-        syncThemeButton();
-      });
-
-      syncThemeButton();
-      setPage(1);
-    </script>
-  </body>
+    load().catch(err => {
+      document.getElementById("articles").innerHTML =
+        `<div class="card"><div class="title">Error</div><div class="summary">${esc(err.message || err)}</div></div>`;
+    });
+  </script>
+</body>
 </html>
