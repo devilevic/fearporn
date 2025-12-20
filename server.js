@@ -5,7 +5,11 @@ const express = require("express");
 const path = require("path");
 const { spawn } = require("child_process");
 
-const { db, DB_PATH } = require("./src/db");
+// IMPORTANT: your src/db.js exports the db object directly (module.exports = db)
+const db = require("./src/db");
+
+// For debugging only (src/db.js uses process.env.DB_PATH or ./data.sqlite)
+const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), "data.sqlite");
 
 const app = express();
 
@@ -142,12 +146,11 @@ app.get("/_debug", (req, res) => {
       .prepare("SELECT COUNT(*) AS c FROM articles WHERE summary IS NULL OR summary = ''")
       .get().c;
 
-    // columns info
     const cols = db.prepare("PRAGMA table_info(articles)").all().map((r) => r.name);
 
     res.json({
       ok: true,
-      db_path: process.env.DB_PATH || DB_PATH,
+      db_path: DB_PATH,
       columns: cols,
       total,
       summarized,
@@ -176,7 +179,6 @@ app.get("/admin/run", async (req, res) => {
     return res.status(409).json({ ok: false, reason: "pipeline already running" });
   }
 
-  // start in background, return immediately
   runPipeline("admin").catch(() => {});
   res.json({ ok: true, started: true });
 });
@@ -195,7 +197,6 @@ app.get("/admin/status", (req, res) => {
 app.get("/admin/reset", (req, res) => {
   if (!requireAdmin(req, res)) return;
 
-  // only resets the in-memory lock/state (does not touch DB)
   pipeline.running = false;
   pipeline.startedAt = null;
 
