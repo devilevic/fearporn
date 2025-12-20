@@ -6,21 +6,28 @@
   <title>fearporn.world</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
+
 <body class="theme-dark">
   <header>
     <div class="header-inner">
       <div class="header-row">
-        <div class="brand">
-          fearporn<span class="brand-dot">.world</span>
+
+        <!-- 🔽 ONLY CHANGE: wrapper added -->
+        <div class="brand-block">
+          <div class="brand">
+            fearporn<span class="brand-dot">.world</span>
+          </div>
+          <div class="tagline">
+            bringing out the worst humanity has to offer
+          </div>
         </div>
-        <div class="tagline">
-          bringing out the worst humanity has to offer
-        </div>
+        <!-- 🔼 END change -->
 
         <button id="themeToggle" class="theme-toggle" type="button">
           <span class="theme-icon">🌙</span>
           <span class="theme-label">Dark</span>
         </button>
+
       </div>
     </div>
   </header>
@@ -41,7 +48,6 @@
     }
 
     function formatStamp(article){
-      // display "category • Dec 14, 09:31"
       const cat = (article.category || "news").toLowerCase();
       const dt = article.summarized_at || article.created_at || article.published_at;
       if(!dt) return cat;
@@ -67,7 +73,10 @@
       }
 
       for(const a of data){
-        const domain = a.source_domain ? a.source_domain : (new URL(a.url)).hostname.replace(/^www\./,"");
+        const domain = a.source_domain
+          ? a.source_domain
+          : (new URL(a.url)).hostname.replace(/^www\./,"");
+
         const meta = formatStamp(a);
 
         el.insertAdjacentHTML("beforeend", `
@@ -77,7 +86,12 @@
             </div>
             <div class="title">${escapeHtml(a.title)}</div>
             <p class="summary">${escapeHtml(a.summary)}</p>
-            <div class="source">Source: <a href="${escapeHtml(a.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(domain)}</a></div>
+            <div class="source">
+              Source:
+              <a href="${escapeHtml(a.url)}" target="_blank" rel="noopener noreferrer">
+                ${escapeHtml(domain)}
+              </a>
+            </div>
           </article>
         `);
       }
