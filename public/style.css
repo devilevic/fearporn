@@ -198,6 +198,31 @@ header{
 .brand-world{color:#cc4f00;}
 .tagline{margin:0;opacity:.85;}
 .theme-btn{margin-left:auto;align-self:flex-start;}
+/* ---- Dark theme toggle button (restore original look) ---- */
+.theme-btn {
+  background: #101018;        /* dark panel */
+  color: #eaeaf0;
+  border: 1px solid #222738;
+  border-radius: 999px;
+  padding: 6px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.theme-btn:hover {
+  background: #161625;
+}
+
+.theme-btn .theme-label {
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+
+.theme-btn .theme-icon {
+  font-size: 1rem;
+}
 
 .card{margin-top:16px;}
 .article-title{margin:0 0 8px 0;color:#cc4f00;}
