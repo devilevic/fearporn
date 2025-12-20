@@ -1,57 +1,56 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>fearporn.world</title>
 
-    <!-- IMPORTANT: use /public/... so CSS always loads -->
+    <!-- Your "perfect" CSS file -->
     <link rel="stylesheet" href="/style.css" />
+
+    <!-- Theme toggle logic (icon + label) -->
+    <script src="/theme.js" defer></script>
   </head>
-  <body class="theme-dark">
+
+  <body>
     <div class="wrap">
       <header class="top">
-        <div>
-          <div class="brand">
-            fearporn<span class="dotworld">.world</span>
-          </div>
+        <div class="brand">
+          <h1 class="logo">
+            fearporn<span class="logo-accent">.world</span>
+          </h1>
           <div class="tagline">bringing out the worst humanity has to offer</div>
         </div>
-        <button id="themeBtn" class="themeBtn">Theme</button>
+
+        <div class="actions">
+          <button id="themeToggle" class="btn" type="button">
+            <span class="theme-icon" aria-hidden="true">🌙</span>
+            <span class="theme-label">Dark</span>
+          </button>
+        </div>
       </header>
 
       <main>
-        <div id="feed"></div>
-        <!-- Pagination container (styled by .pager in your CSS) -->
+        <div id="list" class="list"></div>
         <div id="pager" class="pager"></div>
       </main>
     </div>
 
     <script>
-      // --- Theme toggle (unchanged behavior) ---
-      const themeBtn = document.getElementById("themeBtn");
-      const body = document.body;
+      const ITEMS_PER_PAGE = 10;
 
-      function setTheme(theme) {
-        body.classList.remove("theme-dark", "theme-light");
-        body.classList.add(theme);
-        localStorage.setItem("theme", theme);
+      function escapeHtml(s) {
+        return String(s ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
       }
 
-      const savedTheme = localStorage.getItem("theme") || "theme-dark";
-      setTheme(savedTheme);
-
-      themeBtn.addEventListener("click", () => {
-        const next = body.classList.contains("theme-dark")
-          ? "theme-light"
-          : "theme-dark";
-        setTheme(next);
-      });
-
-      // --- Pagination ---
-      const PAGE_SIZE = 10;
-      const feed = document.getElementById("feed");
-      const pager = document.getElementById("pager");
+      function nl2br(s) {
+        return escapeHtml(s).replaceAll("\n", "<br/>");
+      }
 
       function getPageFromUrl() {
         const u = new URL(window.location.href);
@@ -61,117 +60,150 @@
 
       function setPageInUrl(page) {
         const u = new URL(window.location.href);
-        u.searchParams.set("page", String(page));
-        window.location.href = u.toString(); // simple + reliable
+        if (page <= 1) u.searchParams.delete("page");
+        else u.searchParams.set("page", String(page));
+        window.history.pushState({}, "", u);
       }
 
-      function escapeHtml(str) {
-        return String(str)
-          .replaceAll("&", "&amp;")
-          .replaceAll("<", "&lt;")
-          .replaceAll(">", "&gt;")
-          .replaceAll('"', "&quot;")
-          .replaceAll("'", "&#039;");
-      }
+      function buildPager(totalItems, page, onGo) {
+        const totalPages = Math.max(1, Math.ceil(totalItems / ITEMS_PER_PAGE));
+        const pager = document.getElementById("pager");
+        pager.innerHTML = "";
 
-      function renderArticles(items) {
-        if (!items.length) {
-          feed.innerHTML = `<div class="pending">No articles yet.</div>`;
-          return;
+        if (totalPages <= 1) return;
+
+        function addBtn(label, targetPage, disabled = false, active = false) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "page-btn" + (active ? " active" : "");
+          b.textContent = label;
+          b.disabled = disabled;
+          b.addEventListener("click", () => onGo(targetPage));
+          pager.appendChild(b);
         }
 
-        feed.innerHTML = items
-          .map((a) => {
-            const title = escapeHtml(a.title || "");
-            const summary = escapeHtml(a.summary || "");
-            const url = escapeHtml(a.url || "#");
-            const category = escapeHtml(a.category || "");
-            const createdAt = escapeHtml(a.created_at || "");
-            const sourceDomain = escapeHtml(a.source_domain || "");
+        function addEllipsis() {
+          const s = document.createElement("span");
+          s.className = "page-ellipsis";
+          s.textContent = "…";
+          pager.appendChild(s);
+        }
 
+        // Prev
+        addBtn("Prev", Math.max(1, page - 1), page === 1);
+
+        // Pages (compact with ellipses)
+        const pagesToShow = new Set([1, totalPages, page, page - 1, page + 1, page - 2, page + 2]);
+        const sorted = [...pagesToShow].filter(p => p >= 1 && p <= totalPages).sort((a,b)=>a-b);
+
+        let last = 0;
+        for (const p of sorted) {
+          if (last && p > last + 1) addEllipsis();
+          addBtn(String(p), p, false, p === page);
+          last = p;
+        }
+
+        // Next
+        addBtn("Next", Math.min(totalPages, page + 1), page === totalPages);
+      }
+
+      function render(articles, page) {
+        const totalItems = articles.length;
+        const totalPages = Math.max(1, Math.ceil(totalItems / ITEMS_PER_PAGE));
+        const safePage = Math.min(Math.max(1, page), totalPages);
+
+        const start = (safePage - 1) * ITEMS_PER_PAGE;
+        const pageItems = articles.slice(start, start + ITEMS_PER_PAGE);
+
+        const list = document.getElementById("list");
+        list.innerHTML = pageItems
+          .map((a) => {
+            const title = escapeHtml(a.title);
+            const category = escapeHtml(a.category || "news");
+            const created = escapeHtml(a.created_at || "");
+            const summary = nl2br(a.summary || "");
+            const sourceDomain = escapeHtml(a.source_domain || a.source_name || "source");
+
+            // Title is NOT a link (matches your old styling)
+            // Only the bottom "Source: domain" is the link
             return `
               <article class="card">
                 <div class="meta">
-                  <span class="pill">${category || "news"}</span>
+                  <span class="pill">${category}</span>
                   <span class="dot">•</span>
-                  <span>${createdAt}</span>
+                  <span class="date">${created}</span>
                 </div>
 
-                <h2 class="title"><a href="${url}" target="_blank" rel="noopener noreferrer">${title}</a></h2>
+                <div class="title">${title}</div>
 
-                <div class="summary">${summary.replaceAll("\n", "<br/>")}</div>
+                <div class="summary">${summary}</div>
 
-                <div class="source">Source: <a href="https://${sourceDomain}" target="_blank" rel="noopener noreferrer">${sourceDomain}</a></div>
+                <div class="source">
+                  <span class="source-label">Source:</span>
+                  <a class="source-link" href="${escapeHtml(a.url)}" target="_blank" rel="noopener noreferrer">
+                    ${sourceDomain}
+                  </a>
+                </div>
               </article>
             `;
           })
-          .join("\n");
+          .join("");
+
+        buildPager(totalItems, safePage, (p) => {
+          setPageInUrl(p);
+          render(articles, p);
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        });
       }
 
-      function renderPager(currentPage, totalPages) {
-        if (totalPages <= 1) {
-          pager.innerHTML = "";
-          return;
-        }
+      async function main() {
+        // Fetch up to 100 newest (your API already does this)
+        const res = await fetch("/api/articles?limit=100");
+        const articles = await res.json();
 
-        const parts = [];
-
-        if (currentPage > 1) {
-          parts.push(`<a href="?page=${currentPage - 1}">Prev</a>`);
-        } else {
-          parts.push(`<span>Prev</span>`);
-        }
-
-        // show up to 9 page links with ellipses
-        const windowSize = 7;
-        let start = Math.max(1, currentPage - Math.floor(windowSize / 2));
-        let end = Math.min(totalPages, start + windowSize - 1);
-        start = Math.max(1, end - windowSize + 1);
-
-        if (start > 1) parts.push(`<a href="?page=1">1</a>`, `<span>…</span>`);
-
-        for (let p = start; p <= end; p++) {
-          if (p === currentPage) parts.push(`<b>${p}</b>`);
-          else parts.push(`<a href="?page=${p}">${p}</a>`);
-        }
-
-        if (end < totalPages)
-          parts.push(`<span>…</span>`, `<a href="?page=${totalPages}">${totalPages}</a>`);
-
-        if (currentPage < totalPages) {
-          parts.push(`<a href="?page=${currentPage + 1}">Next</a>`);
-        } else {
-          parts.push(`<span>Next</span>`);
-        }
-
-        pager.innerHTML = parts.join("");
-      }
-
-      async function load() {
         const page = getPageFromUrl();
+        render(Array.isArray(articles) ? articles : [], page);
 
-        const res = await fetch("/api/articles?limit=500");
-        const all = await res.json();
-
-        const totalPages = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
-        const safePage = Math.min(page, totalPages);
-
-        const start = (safePage - 1) * PAGE_SIZE;
-        const slice = all.slice(start, start + PAGE_SIZE);
-
-        renderArticles(slice);
-        renderPager(safePage, totalPages);
+        window.addEventListener("popstate", () => {
+          render(Array.isArray(articles) ? articles : [], getPageFromUrl());
+        });
       }
 
-      load().catch((e) => {
-        feed.innerHTML = `<div class="pending">Failed to load articles.</div>`;
-        pager.innerHTML = "";
+      main().catch((e) => {
+        const list = document.getElementById("list");
+        list.innerHTML = `<div class="card"><div class="summary">Failed to load articles: ${escapeHtml(
+          e?.message || String(e)
+        )}</div></div>`;
       });
     </script>
 
     <style>
-      /* only if you already had this before; safe to keep inline */
-      .dotworld { color: #cc4f00; }
+      /* Minimal additions just for pagination + small logo accent */
+      .logo-accent { color: #cc4f00; }
+      .pager {
+        display: flex;
+        justify-content: center;
+        gap: 8px;
+        margin: 18px 0 8px;
+        flex-wrap: wrap;
+      }
+      .page-btn {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 6px 10px;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+      .page-btn:hover { filter: brightness(1.08); }
+      .page-btn.active {
+        border-color: var(--title);
+        color: var(--title);
+      }
+      .page-btn:disabled { opacity: 0.45; cursor: default; }
+      .page-ellipsis { opacity: 0.6; padding: 6px 4px; }
+      /* Make theme label look like DARK/LIGHT without touching theme.js */
+      .theme-label { text-transform: uppercase; letter-spacing: .06em; }
     </style>
   </body>
 </html>
