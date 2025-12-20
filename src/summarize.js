@@ -61,7 +61,6 @@ EMOJI RULES (important):
 If the paragraph sounds like generic AI journalism, rewrite it to be sharper, shorter, and more opinionated.
 
 Headline: ${title}
-Link (for your private reference only, DO NOT print it): ${url}
 Source domain to print: ${sourceDomain}
 `.trim();
 
