@@ -5,31 +5,32 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>fearporn.world</title>
 
-    <!-- Your static CSS is served at root: /style.css -->
+    <!-- CSS is served at root -->
     <link rel="stylesheet" href="/style.css" />
   </head>
 
   <body>
-    <header class="header">
-      <div class="header-row">
-        <div class="brand">
-          <h1 class="site-title">
-            fearporn<span class="dot">.</span><span class="accent">world</span>
-          </h1>
-          <p class="tagline">bringing out the worst humanity has to offer</p>
-        </div>
+    <header>
+      <div class="header-inner">
+        <div class="header-row">
+          <div class="brand-wrap">
+            <div class="brand">
+              fearporn<span class="brand-dot">.</span>world
+            </div>
+            <div class="tagline">bringing out the worst humanity has to offer</div>
+          </div>
 
-        <!-- Theme toggle on the right, same row -->
-        <button id="themeToggle" class="theme-toggle" type="button" aria-label="Toggle theme">
-          <span id="themeIcon" class="theme-icon">🌙</span>
-          <span id="themeLabel">DARK</span>
-        </button>
+          <!-- Theme toggle on the right, same row -->
+          <button id="themeToggle" class="theme-toggle" type="button" aria-label="Toggle theme">
+            <span id="themeIcon" class="theme-icon">🌙</span>
+            <span id="themeLabel" class="theme-label">DARK</span>
+          </button>
+        </div>
       </div>
     </header>
 
-    <main class="container">
+    <main class="wrap">
       <div id="articles"></div>
-
       <nav class="pagination" id="pagination"></nav>
     </main>
 
@@ -49,12 +50,12 @@
       }
 
       // ✅ Removes the *extra* "Source: ..." lines that the model may have printed inside the summary
-      // while keeping the dedicated bottom source line (rendered separately from article metadata).
+      // while keeping the dedicated bottom source line (rendered separately).
       function stripInlineSources(summary) {
         let s = String(summary ?? "");
 
-        // remove lines that start with "Source:" (case-insensitive)
-        s = s.replace(/^Source:\s*.*$/gmi, "");
+        // remove lines that start with "Source:" (case-insensitive), allowing leading spaces
+        s = s.replace(/^\s*Source:\s*.*$/gmi, "");
 
         // collapse excessive blank lines caused by removals
         s = s.replace(/\n{3,}/g, "\n\n").trim();
@@ -64,7 +65,6 @@
 
       function formatDate(iso) {
         if (!iso) return "";
-        // keep your current look; don’t over-format
         try {
           const d = new Date(iso);
           if (isNaN(d.getTime())) return iso;
@@ -82,12 +82,10 @@
       }
 
       async function fetchTotal() {
-        // If your backend supports it, great. If not, we fallback to using _debug.
-        // _debug already reports total/summarized counts.
         const res = await fetch("/_debug");
         if (!res.ok) return null;
         const data = await res.json();
-        // we only paginate summarized articles
+        // paginate summarized articles only
         return data?.summarized ?? null;
       }
 
@@ -115,9 +113,7 @@
               <span class="ts">${ts}</span>
             </div>
 
-            <h2 class="title">
-              ${title}
-            </h2>
+            <h2 class="title">${title}</h2>
 
             <div class="summary">${summaryHtml}</div>
 
@@ -170,9 +166,7 @@
           last = p;
         }
 
-        nav.appendChild(
-          makeBtn("Next", Math.min(totalPages, currentPage + 1), currentPage === totalPages)
-        );
+        nav.appendChild(makeBtn("Next", Math.min(totalPages, currentPage + 1), currentPage === totalPages));
       }
 
       async function setPage(page) {
@@ -186,7 +180,6 @@
         }
       }
 
-      // Theme toggle UI (uses localStorage key "theme" if your theme.js does)
       function syncThemeButton() {
         const t = localStorage.getItem("theme") || document.documentElement.dataset.theme || "dark";
         const isDark = (t === "dark");
@@ -199,14 +192,10 @@
         const current = localStorage.getItem("theme") || "dark";
         const next = (current === "dark") ? "light" : "dark";
         localStorage.setItem("theme", next);
-
-        // apply immediately (works even if theme.js is simple)
         document.documentElement.dataset.theme = next;
-
         syncThemeButton();
       });
 
-      // initial load
       syncThemeButton();
       setPage(1);
     </script>

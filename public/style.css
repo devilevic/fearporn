@@ -34,6 +34,10 @@ body{
 a{ color:var(--link); text-decoration:none; }
 a:hover{ text-decoration:underline; }
 
+header{
+  border-bottom: 1px solid var(--border);
+}
+
 .header-inner{
   max-width:900px;
   margin:0 auto;
@@ -42,8 +46,13 @@ a:hover{ text-decoration:underline; }
 
 .header-row{
   display:flex;
-  align-items:center;
+  align-items:flex-start;
   justify-content:space-between;
+  gap:16px;
+}
+
+.brand-wrap{
+  min-width: 0;
 }
 
 .brand{
@@ -64,7 +73,6 @@ a:hover{ text-decoration:underline; }
   letter-spacing: 0.2px;
 }
 
-
 .theme-toggle{
   display:flex;
   align-items:center;
@@ -78,7 +86,11 @@ a:hover{ text-decoration:underline; }
   border-radius:10px;
 }
 
-.theme-icon{ font-size:16px; }
+.theme-toggle:hover{
+  filter: brightness(1.05);
+}
+
+.theme-icon{ font-size:16px; line-height:1; }
 .theme-label{ font-size:14px; color:var(--muted); }
 
 .wrap{
@@ -101,6 +113,8 @@ a:hover{ text-decoration:underline; }
   align-items:center;
   color:var(--meta);
   font-size:13px;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
 }
 
 .pill{
@@ -109,6 +123,10 @@ a:hover{ text-decoration:underline; }
   border:1px solid var(--border);
   padding:2px 8px;
   border-radius:999px;
+}
+
+.dotsep{
+  opacity: 0.9;
 }
 
 .title{
@@ -122,10 +140,51 @@ a:hover{ text-decoration:underline; }
 .summary{
   white-space:pre-wrap;
   margin:0;
+  font-size:15px;
 }
 
 .source{
   margin-top:12px;
   font-size:13px;
   color:var(--muted);
+}
+
+/* Pagination (centered + spaced like before) */
+.pagination{
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  gap:8px;
+  margin-top:18px;
+  flex-wrap:wrap;
+}
+
+.page-btn{
+  border:1px solid var(--border);
+  background:var(--panel);
+  color:var(--text);
+  padding:6px 10px;
+  border-radius:8px;
+  cursor:pointer;
+  font: inherit;
+  line-height: 1;
+}
+
+.page-btn:hover{
+  filter: brightness(1.05);
+}
+
+.page-btn:disabled{
+  opacity:0.5;
+  cursor:not-allowed;
+}
+
+.page-btn.active{
+  outline: 2px solid var(--title);
+  outline-offset: 0px;
+}
+
+.ellipsis{
+  color: var(--muted);
+  padding: 0 4px;
 }
