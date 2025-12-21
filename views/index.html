@@ -12,7 +12,6 @@
     <div class="header-inner">
       <div class="header-row">
 
-        <!-- 🔽 ONLY CHANGE: wrapper added -->
         <div class="brand-block">
           <div class="brand">
             fearporn<span class="brand-dot">.world</span>
@@ -21,7 +20,6 @@
             bringing out the worst humanity has to offer
           </div>
         </div>
-        <!-- 🔼 END change -->
 
         <button id="themeToggle" class="theme-toggle" type="button">
           <span class="theme-icon">🌙</span>
@@ -34,6 +32,9 @@
 
   <main class="wrap">
     <div id="feed"></div>
+
+    <!-- Pagination (rendered by JS so page numbers work) -->
+    <div id="pagination" style="text-align:center; margin:40px 0;"></div>
   </main>
 
   <script>
@@ -44,6 +45,7 @@
   </script>
 
   <script src="/theme.js"></script>
+
   <script>
     function escapeHtml(s){
       return String(s||"")
@@ -67,6 +69,28 @@
       return `${cat} \u2022 ${datePart}, ${hh}:${mm}`;
     }
 
+    function renderPagination(){
+      const p = document.getElementById("pagination");
+      const prevPage = page - 1;
+      const nextPage = page + 1;
+
+      const prevStyle = [
+        "color:#cc4f00",
+        "margin:0 10px",
+        prevPage < 1 ? "pointer-events:none" : "",
+        prevPage < 1 ? "opacity:0.4" : ""
+      ].filter(Boolean).join("; ");
+
+      const nextStyle = "color:#cc4f00; margin:0 10px;";
+      const labelStyle = "color:#cc4f00; font-weight:600;";
+
+      p.innerHTML = `
+        <a href="?page=${prevPage}" style="${prevStyle}">‹ Prev</a>
+        <span style="${labelStyle}">Page ${page}</span>
+        <a href="?page=${nextPage}" style="${nextStyle}">Next ›</a>
+      `;
+    }
+
     async function load(){
       const el = document.getElementById("feed");
       el.innerHTML = "";
@@ -76,6 +100,7 @@
 
       if(!Array.isArray(data) || data.length === 0){
         el.innerHTML = `<div class="card"><div class="meta">No summarized articles yet.</div></div>`;
+        renderPagination();
         return;
       }
 
@@ -102,24 +127,11 @@
           </article>
         `);
       }
+
+      renderPagination();
     }
 
     load();
   </script>
-
-  <div style="text-align:center; margin:40px 0;">
-    <a href="?page=${page - 1}" style="color:#cc4f00; margin:0 10px; ${page <= 1 ? 'pointer-events:none; opacity:0.4;' : ''}">
-      ‹ Prev
-    </a>
-
-    <span style="color:#cc4f00; font-weight:600;">
-      Page ${page}
-    </span>
-
-    <a href="?page=${page + 1}" style="color:#cc4f00; margin:0 10px;">
-      Next ›
-    </a>
-</div>
-
 </body>
 </html>
