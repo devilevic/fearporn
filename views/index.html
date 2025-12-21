@@ -32,21 +32,17 @@
 
   <main class="wrap">
     <div id="feed"></div>
-
-    <!-- Pagination (rendered by JS so page numbers work) -->
     <div id="pagination" style="text-align:center; margin:40px 0;"></div>
   </main>
+
+  <script src="/theme.js"></script>
 
   <script>
     const PAGE_SIZE = 10;
     const params = new URLSearchParams(window.location.search);
     const page = Math.max(1, parseInt(params.get("page") || "1", 10));
     const offset = (page - 1) * PAGE_SIZE;
-  </script>
 
-  <script src="/theme.js"></script>
-
-  <script>
     function escapeHtml(s){
       return String(s||"")
         .replaceAll("&","&amp;")
@@ -69,52 +65,69 @@
       return `${cat} \u2022 ${datePart}, ${hh}:${mm}`;
     }
 
-    function renderPagination(){
+    function renderPagination(total){
+      const pages = Math.ceil(total / PAGE_SIZE);
+      if(pages <= 1) return;
+
       const p = document.getElementById("pagination");
-      const prevPage = page - 1;
-      const nextPage = page + 1;
+      let html = "";
 
-      const prevStyle = [
-        "color:#cc4f00",
-        "margin:0 10px",
-        prevPage < 1 ? "pointer-events:none" : "",
-        prevPage < 1 ? "opacity:0.4" : ""
-      ].filter(Boolean).join("; ");
+      if(page > 1){
+        html += `<a href="?page=${page-1}" style="color:#cc4f00; margin:0 8px;">‹</a>`;
+      }
 
-      const nextStyle = "color:#cc4f00; margin:0 10px;";
-      const labelStyle = "color:#cc4f00; font-weight:600;";
+      const start = Math.max(1, page - 4);
+      const end = Math.min(pages, page + 4);
 
-      p.innerHTML = `
-        <a href="?page=${prevPage}" style="${prevStyle}">‹ Prev</a>
-        <span style="${labelStyle}">Page ${page}</span>
-        <a href="?page=${nextPage}" style="${nextStyle}">Next ›</a>
-      `;
+      if(start > 1){
+        html += `<a href="?page=1" style="color:#cc4f00; margin:0 6px;">1</a>`;
+        if(start > 2) html += `<span style="margin:0 6px;">…</span>`;
+      }
+
+      for(let i = start; i <= end; i++){
+        if(i === page){
+          html += `<span style="color:#cc4f00; font-weight:700; margin:0 6px;">${i}</span>`;
+        } else {
+          html += `<a href="?page=${i}" style="color:#cc4f00; margin:0 6px;">${i}</a>`;
+        }
+      }
+
+      if(end < pages){
+        if(end < pages - 1) html += `<span style="margin:0 6px;">…</span>`;
+        html += `<a href="?page=${pages}" style="color:#cc4f00; margin:0 6px;">${pages}</a>`;
+      }
+
+      if(page < pages){
+        html += `<a href="?page=${page+1}" style="color:#cc4f00; margin:0 8px;">›</a>`;
+      }
+
+      p.innerHTML = html;
     }
 
     async function load(){
-      const el = document.getElementById("feed");
-      el.innerHTML = "";
+      const feed = document.getElementById("feed");
+      feed.innerHTML = "";
+
+      const metaRes = await fetch("/_debug");
+      const meta = await metaRes.json();
 
       const res = await fetch(`/api/articles?limit=${PAGE_SIZE}&offset=${offset}`);
       const data = await res.json();
 
       if(!Array.isArray(data) || data.length === 0){
-        el.innerHTML = `<div class="card"><div class="meta">No summarized articles yet.</div></div>`;
-        renderPagination();
+        feed.innerHTML = `<div class="card"><div class="meta">No summarized articles yet.</div></div>`;
+        renderPagination(meta.total || 0);
         return;
       }
 
       for(const a of data){
-        const domain = a.source_domain
-          ? a.source_domain
-          : (new URL(a.url)).hostname.replace(/^www\./,"");
+        const domain = a.source_domain || new URL(a.url).hostname.replace(/^www\./,"");
+        const metaLine = formatStamp(a);
 
-        const meta = formatStamp(a);
-
-        el.insertAdjacentHTML("beforeend", `
+        feed.insertAdjacentHTML("beforeend", `
           <article class="card">
             <div class="meta">
-              <span class="pill">${escapeHtml(meta)}</span>
+              <span class="pill">${escapeHtml(metaLine)}</span>
             </div>
             <div class="title">${escapeHtml(a.title)}</div>
             <p class="summary">${escapeHtml(a.summary)}</p>
@@ -128,7 +141,7 @@
         `);
       }
 
-      renderPagination();
+      renderPagination(meta.total || 0);
     }
 
     load();
