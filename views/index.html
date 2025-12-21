@@ -5,135 +5,99 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>fearporn.world</title>
   <link rel="stylesheet" href="/style.css" />
-  <script src="/theme.js" defer></script>
 </head>
-<body>
-  <header class="site-header">
+
+<body class="theme-dark">
+  <header>
     <div class="header-inner">
       <div class="header-row">
-        <div class="brand-wrap">
-          <h1 class="brand">
-            fearporn<span class="brand-world">.world</span>
-          </h1>
-          <p class="tagline">bringing out the worst humanity has to offer</p>
-        </div>
 
-        <button id="themeToggle" class="theme-btn" type="button" aria-label="Toggle theme">
-          <span class="theme-icon">🌓</span>
-          <span class="theme-label">Theme</span>
+        <!-- 🔽 ONLY CHANGE: wrapper added -->
+        <div class="brand-block">
+          <div class="brand">
+            fearporn<span class="brand-dot">.world</span>
+          </div>
+          <div class="tagline">
+            bringing out the worst humanity has to offer
+          </div>
+        </div>
+        <!-- 🔼 END change -->
+
+        <button id="themeToggle" class="theme-toggle" type="button">
+          <span class="theme-icon">🌙</span>
+          <span class="theme-label">Dark</span>
         </button>
+
       </div>
     </div>
   </header>
 
   <main class="wrap">
-    <div id="articles"></div>
-
-    <nav class="pagination" aria-label="Pagination">
-      <button id="prevBtn" class="page-btn" type="button">← Prev</button>
-      <span id="pageInfo" class="page-info"></span>
-      <button id="nextBtn" class="page-btn" type="button">Next →</button>
-    </nav>
+    <div id="feed"></div>
   </main>
 
-<script>
-(() => {
-  const PAGE_SIZE = 10;
-  const qs = new URLSearchParams(window.location.search);
-  let page = Math.max(1, parseInt(qs.get("page") || "1", 10));
-
-  const articlesEl = document.getElementById("articles");
-  const prevBtn = document.getElementById("prevBtn");
-  const nextBtn = document.getElementById("nextBtn");
-  const pageInfo = document.getElementById("pageInfo");
-
-  function stripTrailingSource(text) {
-    if (!text) return "";
-    const lines = text.replace(/\r\n/g, "\n").split("\n");
-    while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-    while (lines.length && /^source\s*:/i.test(lines[lines.length - 1].trim())) {
-      lines.pop();
-      while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-    }
-    return lines.join("\n").trim();
-  }
-
-  function renderArticles(items) {
-    articlesEl.innerHTML = "";
-    if (!items || !items.length) {
-      articlesEl.innerHTML = '<div class="card"><p>No articles yet.</p></div>';
-      return;
+  <script src="/theme.js"></script>
+  <script>
+    function escapeHtml(s){
+      return String(s||"")
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#39;");
     }
 
-    for (const a of items) {
-      const card = document.createElement("article");
-      card.className = "card";
+    function formatStamp(article){
+      const cat = (article.category || "news").toLowerCase();
+      const dt = article.summarized_at || article.created_at || article.published_at;
+      if(!dt) return cat;
 
-      const title = document.createElement("h3");
-      title.className = "article-title";
-      title.textContent = a.title || "(untitled)";
-      card.appendChild(title);
+      const d = new Date(dt);
+      const opts = { month:"short", day:"2-digit" };
+      const datePart = d.toLocaleDateString("en-US", opts);
+      const hh = String(d.getHours()).padStart(2,"0");
+      const mm = String(d.getMinutes()).padStart(2,"0");
+      return `${cat} \u2022 ${datePart}, ${hh}:${mm}`;
+    }
 
-      const meta = document.createElement("div");
-      meta.className = "meta";
-      if (a.published_at) {
-        try { meta.textContent = new Date(a.published_at).toLocaleString(); } catch {}
+    async function load(){
+      const el = document.getElementById("feed");
+      el.innerHTML = "";
+
+      const res = await fetch(`/api/articles?ts=${Date.now()}`, { cache: "no-store" });
+      const data = await res.json();
+
+      if(!Array.isArray(data) || data.length === 0){
+        el.innerHTML = `<div class="card"><div class="meta">No summarized articles yet.</div></div>`;
+        return;
       }
-      card.appendChild(meta);
 
-      const summary = document.createElement("pre");
-      summary.className = "summary";
-      summary.textContent = stripTrailingSource(a.summary || "");
-      card.appendChild(summary);
+      for(const a of data){
+        const domain = a.source_domain
+          ? a.source_domain
+          : (new URL(a.url)).hostname.replace(/^www\./,"");
 
-      const source = document.createElement("div");
-      source.className = "source-line";
-      const domain = a.source_domain || a.source_name || "source";
+        const meta = formatStamp(a);
 
-      const link = document.createElement("a");
-      link.href = a.url;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      link.textContent = domain;
-
-      source.appendChild(document.createTextNode("Source: "));
-      source.appendChild(link);
-      card.appendChild(source);
-
-      articlesEl.appendChild(card);
+        el.insertAdjacentHTML("beforeend", `
+          <article class="card">
+            <div class="meta">
+              <span class="pill">${escapeHtml(meta)}</span>
+            </div>
+            <div class="title">${escapeHtml(a.title)}</div>
+            <p class="summary">${escapeHtml(a.summary)}</p>
+            <div class="source">
+              Source:
+              <a href="${escapeHtml(a.url)}" target="_blank" rel="noopener noreferrer">
+                ${escapeHtml(domain)}
+              </a>
+            </div>
+          </article>
+        `);
+      }
     }
-  }
 
-  async function load() {
-    const offset = (page - 1) * PAGE_SIZE;
-
-    pageInfo.textContent = `Page ${page}`;
-    prevBtn.disabled = page <= 1;
-    nextBtn.disabled = true;
-
-    const res = await fetch(`/api/articles?limit=${PAGE_SIZE}&offset=${offset}`);
-    const items = await res.json();
-
-    renderArticles(items);
-    nextBtn.disabled = !items || items.length < PAGE_SIZE;
-  }
-
-  prevBtn.addEventListener("click", () => {
-    if (page <= 1) return;
-    page -= 1;
-    window.location.search = `?page=${page}`;
-  });
-
-  nextBtn.addEventListener("click", () => {
-    page += 1;
-    window.location.search = `?page=${page}`;
-  });
-
-  load().catch(err => {
-    articlesEl.innerHTML = '<div class="card"><p>Failed to load articles.</p></div>';
-    console.error(err);
-  });
-})();
-</script>
+    load();
+  </script>
 </body>
 </html>
