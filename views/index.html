@@ -111,8 +111,13 @@
       const metaRes = await fetch("/_debug");
       const meta = await metaRes.json();
 
-      const res = await fetch(`/api/articles?limit=${PAGE_SIZE}&offset=${offset}`);
-      const data = await res.json();
+      // IMPORTANT: backend currently ignores limit/offset, so fetch all then slice locally
+      const res = await fetch(`/api/articles`);
+      const all = await res.json();
+
+      const data = Array.isArray(all)
+        ? all.slice(offset, offset + PAGE_SIZE)
+        : [];
 
       if(!Array.isArray(data) || data.length === 0){
         feed.innerHTML = `<div class="card"><div class="meta">No summarized articles yet.</div></div>`;
