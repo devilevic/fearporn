@@ -36,6 +36,13 @@
     <div id="feed"></div>
   </main>
 
+  <script>
+    const PAGE_SIZE = 10;
+    const params = new URLSearchParams(window.location.search);
+    const page = Math.max(1, parseInt(params.get("page") || "1", 10));
+    const offset = (page - 1) * PAGE_SIZE;
+  </script>
+
   <script src="/theme.js"></script>
   <script>
     function escapeHtml(s){
@@ -64,7 +71,7 @@
       const el = document.getElementById("feed");
       el.innerHTML = "";
 
-      const res = await fetch(`/api/articles?ts=${Date.now()}`, { cache: "no-store" });
+      const res = await fetch(`/api/articles?limit=${PAGE_SIZE}&offset=${offset}`);
       const data = await res.json();
 
       if(!Array.isArray(data) || data.length === 0){
@@ -99,5 +106,20 @@
 
     load();
   </script>
+
+  <div style="text-align:center; margin:40px 0;">
+    <a href="?page=${page - 1}" style="color:#cc4f00; margin:0 10px; ${page <= 1 ? 'pointer-events:none; opacity:0.4;' : ''}">
+      ‹ Prev
+    </a>
+
+    <span style="color:#cc4f00; font-weight:600;">
+      Page ${page}
+    </span>
+
+    <a href="?page=${page + 1}" style="color:#cc4f00; margin:0 10px;">
+      Next ›
+    </a>
+</div>
+
 </body>
 </html>
