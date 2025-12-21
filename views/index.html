@@ -67,7 +67,10 @@
 
     function renderPagination(total){
       const pages = Math.ceil(total / PAGE_SIZE);
-      if(pages <= 1) return;
+      if(pages <= 1) {
+        document.getElementById("pagination").innerHTML = "";
+        return;
+      }
 
       const p = document.getElementById("pagination");
       let html = "";
@@ -108,12 +111,17 @@
       const feed = document.getElementById("feed");
       feed.innerHTML = "";
 
-      const metaRes = await fetch("/_debug");
-      const meta = await metaRes.json();
-
-      // IMPORTANT: backend currently ignores limit/offset, so fetch all then slice locally
+      // We fetch the same dataset we render, and paginate based on its length
       const res = await fetch(`/api/articles`);
       const all = await res.json();
+      const total = Array.isArray(all) ? all.length : 0;
+      const pages = Math.ceil(total / PAGE_SIZE);
+
+      // If user clicks past the last real page, jump back to the last page that exists
+      if(pages > 0 && page > pages){
+        window.location.search = `?page=${pages}`;
+        return;
+      }
 
       const data = Array.isArray(all)
         ? all.slice(offset, offset + PAGE_SIZE)
@@ -121,7 +129,7 @@
 
       if(!Array.isArray(data) || data.length === 0){
         feed.innerHTML = `<div class="card"><div class="meta">No summarized articles yet.</div></div>`;
-        renderPagination(meta.total || 0);
+        renderPagination(total);
         return;
       }
 
@@ -146,7 +154,7 @@
         `);
       }
 
-      renderPagination(meta.total || 0);
+      renderPagination(total);
     }
 
     load();
