@@ -7,6 +7,24 @@ const { spawn } = require("child_process");
 // IMPORTANT: your src/db.js exports the db object directly (module.exports = db)
 const db = require("./src/db");
 
+// Detect which column holds the article summary (handles older DB schemas)
+const SUMMARY_COL = (() => {
+  try {
+    const cols = db.prepare("PRAGMA table_info(articles)").all().map((c) => c.name);
+    const preferred = [
+      "summary",
+      "ai_summary",
+      "summary_text",
+      "text_summary",
+      "abstract",
+      "description",
+    ];
+    return preferred.find((c) => cols.includes(c)) || "summary";
+  } catch {
+    return "summary";
+  }
+})();
+
 // For debugging only (src/db.js uses process.env.DB_PATH or ./data.sqlite)
 const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), "data.sqlite");
 
@@ -143,10 +161,20 @@ app.get("/a/:id", (req, res) => {
       return res.status(400).type("text").send("Invalid article id");
     }
 
+    // ✅ Use detected summary column and alias it as "summary"
     const row = db
       .prepare(
         `
-        SELECT id, title, url, category, published_at, created_at, summary, source_domain, source_name
+        SELECT
+          id,
+          title,
+          url,
+          category,
+          published_at,
+          created_at,
+          ${SUMMARY_COL} AS summary,
+          source_domain,
+          source_name
         FROM articles
         WHERE id = ?
         LIMIT 1
@@ -161,7 +189,11 @@ app.get("/a/:id", (req, res) => {
     const stamp = formatStamp(row.published_at || row.created_at);
     const cat = row.category ? escapeHtml(row.category) : "";
     const title = escapeHtml(row.title);
-    const summary = escapeHtml(row.summary || "");
+
+    // ✅ Safer extraction + trim
+    const summaryText = String(row.summary ?? "").trim();
+    const summary = escapeHtml(summaryText);
+
     const source = escapeHtml(row.source_domain || row.source_name || "");
     const sourceUrl = row.url || "";
 
@@ -200,7 +232,11 @@ app.get("/a/:id", (req, res) => {
       <div class="meta">${cat}${cat && stamp ? " • " : ""}${stamp}</div>
       <div class="title">${title}</div>
 
-      ${summary ? `<div class="summary">${summary}</div>` : ""}
+      ${
+        summary
+          ? `<div class="summary">${summary}</div>`
+          : `<div class="summary summary-empty">Summary not available yet.</div>`
+      }
 
       <div class="source">
         Source:
@@ -226,13 +262,22 @@ app.get("/a/:id", (req, res) => {
 /* -------------------- API -------------------- */
 app.get("/api/articles", (req, res) => {
   try {
-    // Only show summarized articles
+    // ✅ Only show summarized articles (using detected summary column)
     const rows = db
       .prepare(
         `
-        SELECT id, title, url, category, published_at, created_at, summary, source_domain, source_name
+        SELECT
+          id,
+          title,
+          url,
+          category,
+          published_at,
+          created_at,
+          ${SUMMARY_COL} AS summary,
+          source_domain,
+          source_name
         FROM articles
-        WHERE summary IS NOT NULL AND summary != ''
+        WHERE ${SUMMARY_COL} IS NOT NULL AND ${SUMMARY_COL} != ''
         ORDER BY datetime(created_at) DESC
         LIMIT 5000
       `
@@ -253,11 +298,15 @@ app.get("/_version", (req, res) => {
 app.get("/_debug", (req, res) => {
   try {
     const total = db.prepare("SELECT COUNT(*) AS c FROM articles").get().c;
+
+    // Note: Keep these, but now they should ideally use SUMMARY_COL too.
+    // If you want, I can update these counters as well.
     const summarized = db
-      .prepare("SELECT COUNT(*) AS c FROM articles WHERE summary IS NOT NULL AND summary != ''")
+      .prepare(`SELECT COUNT(*) AS c FROM articles WHERE ${SUMMARY_COL} IS NOT NULL AND ${SUMMARY_COL} != ''`)
       .get().c;
+
     const unsummarized = db
-      .prepare("SELECT COUNT(*) AS c FROM articles WHERE summary IS NULL OR summary = ''")
+      .prepare(`SELECT COUNT(*) AS c FROM articles WHERE ${SUMMARY_COL} IS NULL OR ${SUMMARY_COL} = ''`)
       .get().c;
 
     const cols = db.prepare("PRAGMA table_info(articles)").all().map((r) => r.name);
@@ -265,6 +314,7 @@ app.get("/_debug", (req, res) => {
     res.json({
       ok: true,
       db_path: DB_PATH,
+      summary_col_detected: SUMMARY_COL,
       columns: cols,
       total,
       summarized,
