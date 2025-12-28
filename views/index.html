@@ -4,15 +4,15 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>fearporn.world</title>
+
   <link rel="stylesheet" href="/style.css" />
 
-    <!-- Privacy-friendly analytics by Plausible -->
-  <script async src="https://plausible.io/js/pa-ucd38PpL8wRvVZvLWbUmD.js"></script>
-  <script>
-    window.plausible=window.plausible||function(){(plausible.q=plausible.q||[]).push(arguments)},plausible.init=plausible.init||function(i){plausible.o=i||{}};
-    plausible.init()
+  <!-- Plausible Analytics -->
+  <script
+    defer
+    data-domain="fearporn.world"
+    src="https://plausible.io/js/script.js">
   </script>
-
 </head>
 
 <body class="theme-dark">
@@ -47,6 +47,7 @@
 
   <script>
     const PAGE_SIZE = 10;
+
     const params = new URLSearchParams(window.location.search);
     const page = Math.max(1, parseInt(params.get("page") || "1", 10));
     const offset = (page - 1) * PAGE_SIZE;
@@ -73,61 +74,71 @@
       return `${cat} \u2022 ${datePart}, ${hh}:${mm}`;
     }
 
-    function renderPagination(total){
-      const pages = Math.ceil(total / PAGE_SIZE);
-      if(pages <= 1) {
-        document.getElementById("pagination").innerHTML = "";
-        return;
-      }
-
+    function renderPagination(currentPage, totalPages){
       const p = document.getElementById("pagination");
-      let html = "";
+      p.innerHTML = "";
 
-      if(page > 1){
-        html += `<a href="?page=${page-1}" style="color:#cc4f00; margin:0 8px;">‹</a>`;
+      if (totalPages <= 1) return;
+
+      const WINDOW = 10;
+      const start = Math.max(1, currentPage - WINDOW);
+      const end = Math.min(totalPages, currentPage + WINDOW);
+
+      function link(label, pageNum, active = false){
+        const a = document.createElement("a");
+        a.href = `/?page=${pageNum}`;
+        a.textContent = label;
+        a.style.color = "#cc4f00";
+        a.style.margin = "0 6px";
+        if(active){
+          a.style.fontWeight = "700";
+          a.style.pointerEvents = "none";
+        }
+        return a;
       }
 
-      const start = Math.max(1, page - 4);
-      const end = Math.min(pages, page + 4);
+      function dots(){
+        const s = document.createElement("span");
+        s.textContent = "…";
+        s.style.margin = "0 6px";
+        return s;
+      }
+
+      if(currentPage > 1){
+        p.appendChild(link("‹", currentPage - 1));
+      }
 
       if(start > 1){
-        html += `<a href="?page=1" style="color:#cc4f00; margin:0 6px;">1</a>`;
-        if(start > 2) html += `<span style="margin:0 6px;">…</span>`;
+        p.appendChild(link("1", 1));
+        if(start > 2) p.appendChild(dots());
       }
 
       for(let i = start; i <= end; i++){
-        if(i === page){
-          html += `<span style="color:#cc4f00; font-weight:700; margin:0 6px;">${i}</span>`;
-        } else {
-          html += `<a href="?page=${i}" style="color:#cc4f00; margin:0 6px;">${i}</a>`;
-        }
+        p.appendChild(link(i, i, i === currentPage));
       }
 
-      if(end < pages){
-        if(end < pages - 1) html += `<span style="margin:0 6px;">…</span>`;
-        html += `<a href="?page=${pages}" style="color:#cc4f00; margin:0 6px;">${pages}</a>`;
+      if(end < totalPages){
+        if(end < totalPages - 1) p.appendChild(dots());
+        p.appendChild(link(totalPages, totalPages));
       }
 
-      if(page < pages){
-        html += `<a href="?page=${page+1}" style="color:#cc4f00; margin:0 8px;">›</a>`;
+      if(currentPage < totalPages){
+        p.appendChild(link("›", currentPage + 1));
       }
-
-      p.innerHTML = html;
     }
 
     async function load(){
       const feed = document.getElementById("feed");
       feed.innerHTML = "";
 
-      // We fetch the same dataset we render, and paginate based on its length
-      const res = await fetch(`/api/articles`);
+      const res = await fetch("/api/articles");
       const all = await res.json();
-      const total = Array.isArray(all) ? all.length : 0;
-      const pages = Math.ceil(total / PAGE_SIZE);
 
-      // If user clicks past the last real page, jump back to the last page that exists
-      if(pages > 0 && page > pages){
-        window.location.search = `?page=${pages}`;
+      const total = Array.isArray(all) ? all.length : 0;
+      const totalPages = Math.ceil(total / PAGE_SIZE);
+
+      if(totalPages > 0 && page > totalPages){
+        window.location.search = `?page=${totalPages}`;
         return;
       }
 
@@ -135,9 +146,13 @@
         ? all.slice(offset, offset + PAGE_SIZE)
         : [];
 
-      if(!Array.isArray(data) || data.length === 0){
-        feed.innerHTML = `<div class="card"><div class="meta">No summarized articles yet.</div></div>`;
-        renderPagination(total);
+      if(data.length === 0){
+        feed.innerHTML = `
+          <div class="card">
+            <div class="meta">No summarized articles yet.</div>
+          </div>
+        `;
+        renderPagination(page, totalPages);
         return;
       }
 
@@ -162,7 +177,7 @@
         `);
       }
 
-      renderPagination(total);
+      renderPagination(page, totalPages);
     }
 
     load();
