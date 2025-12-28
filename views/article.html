@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>fearporn.world</title>
+
+  <link rel="stylesheet" href="/style.css" />
+</head>
+
+<body class="theme-dark">
+  <header>
+    <div class="header-inner">
+      <div class="header-row">
+
+        <div class="brand-block">
+          <div class="brand">
+            fearporn<span class="brand-dot">.world</span>
+          </div>
+          <div class="tagline">
+            bringing out the worst humanity has to offer
+          </div>
+        </div>
+
+        <button id="themeToggle" class="theme-toggle" type="button">
+          <span class="theme-icon">🌙</span>
+          <span class="theme-label">Dark</span>
+        </button>
+
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div id="article"></div>
+  </main>
+
+  <script src="/theme.js"></script>
+
+  <script>
+    function escapeHtml(s) {
+      return String(s || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function formatStamp(article) {
+      const cat = (article.category || "news").toLowerCase();
+      const dt =
+        article.summarized_at ||
+        article.created_at ||
+        article.published_at;
+
+      if (!dt) return cat;
+
+      const d = new Date(dt);
+      const opts = { month: "short", day: "2-digit" };
+      const datePart = d.toLocaleDateString("en-US", opts);
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mm = String(d.getMinutes()).padStart(2, "0");
+
+      return `${cat} • ${datePart}, ${hh}:${mm}`;
+    }
+
+    async function loadArticle() {
+      const id = window.location.pathname.split("/").pop();
+      const res = await fetch(`/api/articles/${id}`);
+
+      if (!res.ok) {
+        document.getElementById("article").innerHTML =
+          `<div class="card"><div class="meta">Article not found.</div></div>`;
+        return;
+      }
+
+      const a = await res.json();
+      const domain =
+        a.source_domain ||
+        new URL(a.url).hostname.replace(/^www\./, "");
+
+      document.getElementById("article").innerHTML = `
+        <article class="card">
+          <div class="meta">
+            <span class="pill">${escapeHtml(formatStamp(a))}</span>
+          </div>
+
+          <div class="title">${escapeHtml(a.title)}</div>
+
+          <p class="summary">${escapeHtml(a.summary)}</p>
+
+          <div class="source">
+            Source:
+            <a href="${escapeHtml(a.url)}" target="_blank" rel="noopener noreferrer">
+              ${escapeHtml(domain)}
+            </a>
+          </div>
+        </article>
+      `;
+    }
+
+    loadArticle();
+  </script>
+</body>
+</html>
