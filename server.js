@@ -119,7 +119,7 @@ app.get("/api/articles", (req, res) => {
         FROM articles
         WHERE summary IS NOT NULL AND summary != ''
         ORDER BY datetime(created_at) DESC
-        LIMIT 200
+        LIMIT 5000
       `
       )
       .all();
