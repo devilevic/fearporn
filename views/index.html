@@ -5,6 +5,20 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>fearporn.world</title>
   <link rel="stylesheet" href="/style.css" />
+
+  <!-- Plausible Analytics (only on production domain) -->
+  <script>
+    (function () {
+      const host = (window.location.hostname || "").replace(/^www\./, "");
+      if (host !== "fearporn.world") return; // don't track staging / onrender domains
+
+      const s = document.createElement("script");
+      s.defer = true;
+      s.setAttribute("data-domain", "fearporn.world");
+      s.src = "https://plausible.io/js/script.js";
+      document.head.appendChild(s);
+    })();
+  </script>
 </head>
 
 <body class="theme-dark">
