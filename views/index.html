@@ -178,12 +178,13 @@
             </div>
 
             <div class="actions"
-                 data-title="${escapeHtml(a.title)}"
-                 data-link="${escapeHtml(permalink)}">
-              <button class="share-btn" type="button" data-action="native">Share</button>
-              <a class="share-link" href="#" data-action="x">X</a>
-              <button class="share-btn" type="button" data-action="copy">Copy link</button>
-              <span class="share-toast" aria-live="polite"></span>
+               data-title="${escapeHtml(a.title)}"
+               data-link="${escapeHtml(permalink)}">
+              <button class="share-btn share-primary"
+                      type="button"
+                      data-action="native">
+                ➦ Share
+              </button>
             </div>
           </div>
 
@@ -209,45 +210,19 @@
 
       const title = actions.getAttribute("data-title") || "";
       const link = actions.getAttribute("data-link") || "";
-      const toast = actions.querySelector(".share-toast");
-
-      const say = (msg) => {
-        if (!toast) return;
-        toast.textContent = msg;
-        toast.classList.add("show");
-        setTimeout(() => toast.classList.remove("show"), 1200);
-      };
 
       const action = actionEl.getAttribute("data-action");
       const enc = encodeURIComponent;
 
       if (action === "native") {
         if (navigator.share) {
-          try { await navigator.share({ title, text: title, url: link }); } catch {}
-        } else {
-          say("Sharing not supported here");
+          try {
+            await navigator.share({ title, text: title, url: link });
+          } catch {}
         }
         return;
       }
 
-      if (action === "copy") {
-        try {
-          await navigator.clipboard.writeText(link);
-          say("Copied!");
-        } catch {
-          window.prompt("Copy this link:", link);
-        }
-        return;
-      }
-
-      if (action === "x") {
-        window.open(
-          `https://twitter.com/intent/tweet?text=${enc(title)}&url=${enc(link)}`,
-          "_blank",
-          "noopener,noreferrer"
-        );
-        return;
-      }
       
     });
   </script>
