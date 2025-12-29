@@ -180,3 +180,14 @@ a:hover{ text-decoration:underline; }
   opacity:1;
 }
 
+.source-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin-top:10px;
+}
+
+.source-row .actions{
+  margin-top:0;
+}

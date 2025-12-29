@@ -168,6 +168,8 @@
             </div>
             <div class="title">${escapeHtml(a.title)}</div>
             <p class="summary">${escapeHtml(a.summary)}</p>
+
+          <div class="source-row">
             <div class="source">
               Source:
               <a href="${escapeHtml(a.url)}" target="_blank" rel="noopener noreferrer">
@@ -175,17 +177,17 @@
               </a>
             </div>
 
-            <!-- Share row (minimal addition) -->
             <div class="actions"
                  data-title="${escapeHtml(a.title)}"
                  data-link="${escapeHtml(permalink)}">
               <button class="share-btn" type="button" data-action="native">Share</button>
               <a class="share-link" href="#" data-action="x">X</a>
-              <a class="share-link" href="#" data-action="wa">WhatsApp</a>
-              <a class="share-link" href="#" data-action="email">Email</a>
               <button class="share-btn" type="button" data-action="copy">Copy link</button>
               <span class="share-toast" aria-live="polite"></span>
             </div>
+          </div>
+
+
           </article>
         `);
       }
@@ -246,22 +248,7 @@
         );
         return;
       }
-
-      if (action === "wa") {
-        window.open(
-          `https://wa.me/?text=${enc(title + " " + link)}`,
-          "_blank",
-          "noopener,noreferrer"
-        );
-        return;
-      }
-
-      if (action === "email") {
-        const subject = enc(title);
-        const body = enc(`${title}\n\n${link}`);
-        window.location.href = `mailto:?subject=${subject}&body=${body}`;
-        return;
-      }
+      
     });
   </script>
 </body>
