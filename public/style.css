@@ -156,3 +156,13 @@ a:hover{ text-decoration:underline; }
 .source-row .actions{
   margin-top:0;
 }
+
+button.pill{
+  cursor: pointer;
+  font-family: inherit;
+}
+
+button.pill:hover{
+  filter: brightness(1.1);
+}
+
