@@ -129,3 +129,54 @@ a:hover{ text-decoration:underline; }
   font-size:13px;
   color:var(--muted);
 }
+
+.actions{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin-top:12px;
+  flex-wrap:wrap;
+}
+
+.share-btn{
+  cursor:pointer;
+  border:1px solid var(--border);
+  background:var(--panel);
+  color:var(--text);
+  padding:6px 10px;
+  border-radius:10px;
+  font-size:13px;
+  font-family: inherit;
+}
+
+.share-btn:hover{
+  filter:brightness(1.1);
+}
+
+.share-link{
+  display:inline-block;
+  border:1px solid var(--border);
+  background:var(--pill);
+  color:var(--text);
+  padding:6px 10px;
+  border-radius:10px;
+  font-size:13px;
+  text-decoration:none;
+}
+
+.share-link:hover{
+  text-decoration:none;
+  filter:brightness(1.1);
+}
+
+.share-toast{
+  color:var(--muted);
+  font-size:13px;
+  opacity:0;
+  transition:opacity 150ms ease;
+}
+
+.share-toast.show{
+  opacity:1;
+}
+

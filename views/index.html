@@ -159,6 +159,7 @@
       for(const a of data){
         const domain = a.source_domain || new URL(a.url).hostname.replace(/^www\./,"");
         const metaLine = formatStamp(a);
+        const permalink = `${window.location.origin}/a/${a.id}`;
 
         feed.insertAdjacentHTML("beforeend", `
           <article class="card">
@@ -173,6 +174,18 @@
                 ${escapeHtml(domain)}
               </a>
             </div>
+
+            <!-- Share row (minimal addition) -->
+            <div class="actions"
+                 data-title="${escapeHtml(a.title)}"
+                 data-link="${escapeHtml(permalink)}">
+              <button class="share-btn" type="button" data-action="native">Share</button>
+              <a class="share-link" href="#" data-action="x">X</a>
+              <a class="share-link" href="#" data-action="wa">WhatsApp</a>
+              <a class="share-link" href="#" data-action="email">Email</a>
+              <button class="share-btn" type="button" data-action="copy">Copy link</button>
+              <span class="share-toast" aria-live="polite"></span>
+            </div>
           </article>
         `);
       }
@@ -181,6 +194,75 @@
     }
 
     load();
+
+    // Share handlers (minimal addition, uses event delegation)
+    document.getElementById("feed").addEventListener("click", async (e) => {
+      const actionEl = e.target.closest("[data-action]");
+      if (!actionEl) return;
+
+      e.preventDefault();
+
+      const actions = actionEl.closest(".actions");
+      if (!actions) return;
+
+      const title = actions.getAttribute("data-title") || "";
+      const link = actions.getAttribute("data-link") || "";
+      const toast = actions.querySelector(".share-toast");
+
+      const say = (msg) => {
+        if (!toast) return;
+        toast.textContent = msg;
+        toast.classList.add("show");
+        setTimeout(() => toast.classList.remove("show"), 1200);
+      };
+
+      const action = actionEl.getAttribute("data-action");
+      const enc = encodeURIComponent;
+
+      if (action === "native") {
+        if (navigator.share) {
+          try { await navigator.share({ title, text: title, url: link }); } catch {}
+        } else {
+          say("Sharing not supported here");
+        }
+        return;
+      }
+
+      if (action === "copy") {
+        try {
+          await navigator.clipboard.writeText(link);
+          say("Copied!");
+        } catch {
+          window.prompt("Copy this link:", link);
+        }
+        return;
+      }
+
+      if (action === "x") {
+        window.open(
+          `https://twitter.com/intent/tweet?text=${enc(title)}&url=${enc(link)}`,
+          "_blank",
+          "noopener,noreferrer"
+        );
+        return;
+      }
+
+      if (action === "wa") {
+        window.open(
+          `https://wa.me/?text=${enc(title + " " + link)}`,
+          "_blank",
+          "noopener,noreferrer"
+        );
+        return;
+      }
+
+      if (action === "email") {
+        const subject = enc(title);
+        const body = enc(`${title}\n\n${link}`);
+        window.location.href = `mailto:?subject=${subject}&body=${body}`;
+        return;
+      }
+    });
   </script>
 </body>
 </html>
