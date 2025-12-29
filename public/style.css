@@ -140,6 +140,9 @@ a:hover{ text-decoration:underline; }
 
 .share-primary{
   white-space: nowrap;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
 }
 
 .source-row{
