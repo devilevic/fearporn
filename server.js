@@ -238,9 +238,23 @@ app.get("/a/:id", (req, res) => {
           : `<div class="summary summary-empty">Summary not available yet.</div>`
       }
 
-      <div class="source">
-        Source:
-        <a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer">${source || "link"}</a>
+      <div class="source-row">
+        <div class="source">
+          Source:
+          <a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer">
+            ${source || "link"}
+          </a>
+        </div>
+
+        <div class="actions"
+             data-title="${escapeHtml(row.title)}"
+             data-link="${escapeHtml(`${req.protocol}://${req.get("host")}/a/${row.id}`)}">
+          <button class="pill share-primary"
+                  type="button"
+                  data-action="native">
+            ➦ Share
+          </button>
+        </div>
       </div>
     </div>
 
@@ -250,6 +264,28 @@ app.get("/a/:id", (req, res) => {
   </main>
 
   <script src="/theme.js"></script>
+
+  <script>
+  document.addEventListener("click", async (e) => {
+    const btn = e.target.closest('[data-action="native"]');
+    if (!btn) return;
+
+    e.preventDefault();
+
+    const actions = btn.closest(".actions");
+    if (!actions) return;
+
+    const title = actions.getAttribute("data-title") || "";
+    const link = actions.getAttribute("data-link") || "";
+
+    if (navigator.share) {
+      try {
+        await navigator.share({ title, text: title, url: link });
+      } catch {}
+    }
+  });
+</script>           
+
 </body>
 </html>`;
 
@@ -384,3 +420,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
