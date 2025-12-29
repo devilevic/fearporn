@@ -161,6 +161,17 @@ button.pill{
   cursor: pointer;
   font-family: inherit;
 }
+button.pill{
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--pill);
+  border: 1px solid var(--border);
+  padding: 2px 8px;        /* EXACT same as .pill */
+  line-height: normal;
+  cursor: pointer;
+  font-family: inherit;
+}
+
 
 button.pill:hover{
   filter: brightness(1.1);
