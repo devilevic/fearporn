@@ -177,3 +177,7 @@ button.pill:hover{
   filter: brightness(1.1);
 }
 
+.brand{
+  text-decoration: none;
+}
+
