@@ -7,24 +7,6 @@ const { spawn } = require("child_process");
 // IMPORTANT: your src/db.js exports the db object directly (module.exports = db)
 const db = require("./src/db");
 
-// Detect which column holds the article summary (handles older DB schemas)
-const SUMMARY_COL = (() => {
-  try {
-    const cols = db.prepare("PRAGMA table_info(articles)").all().map((c) => c.name);
-    const preferred = [
-      "summary",
-      "ai_summary",
-      "summary_text",
-      "text_summary",
-      "abstract",
-      "description",
-    ];
-    return preferred.find((c) => cols.includes(c)) || "summary";
-  } catch {
-    return "summary";
-  }
-})();
-
 // For debugging only (src/db.js uses process.env.DB_PATH or ./data.sqlite)
 const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), "data.sqlite");
 
@@ -104,6 +86,96 @@ function formatStamp(iso) {
   });
 }
 
+/* -------------------- Feed shaping ("soft diversity") -------------------- */
+// We do NOT cap tabloids. Instead we lightly shape the returned list so the homepage
+// doesn't get stuck on the exact same domain/story in consecutive cards.
+//
+// Strategy:
+// - Keep recency bias (we always pick from the front of the queue)
+// - Avoid back-to-back same domain when possible
+// - Avoid showing near-duplicate headlines repeatedly in a short window
+
+function normalizeTitleKey(title) {
+  const t = String(title || "")
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const stop = new Set([
+    "a","an","and","are","as","at","be","but","by","for","from","has","have","in","into","is","it","its",
+    "of","on","or","s","that","the","this","to","vs","was","were","with","after","before","over","under",
+    "about","against","amid","says","say","new","breaking",
+  ]);
+
+  const words = t
+    .split(" ")
+    .filter((w) => w.length > 2 && !stop.has(w))
+    .slice(0, 10);
+
+  return words.join(" ");
+}
+
+function shapeFeed(rows, opts = {}) {
+  const scanLimit = Math.max(50, Math.min(500, opts.scanLimit || 180));
+  const recentWindow = Math.max(10, Math.min(120, opts.recentWindow || 40));
+
+  const queue = rows.slice();
+  const out = [];
+  let lastDomain = "";
+  const recentKeys = [];
+  const recentKeySet = new Set();
+
+  function remember(key) {
+    if (!key) return;
+    recentKeys.push(key);
+    recentKeySet.add(key);
+    while (recentKeys.length > recentWindow) {
+      const old = recentKeys.shift();
+      if (!recentKeys.includes(old)) recentKeySet.delete(old);
+    }
+  }
+
+  while (queue.length) {
+    let pickIdx = -1;
+
+    // 1) Prefer: domain != last AND titleKey not in recent window
+    for (let i = 0; i < Math.min(scanLimit, queue.length); i++) {
+      const r = queue[i];
+      const dom = (r.source_domain || "").toLowerCase();
+      const key = normalizeTitleKey(r.title);
+      if (dom && dom === lastDomain) continue;
+      if (key && recentKeySet.has(key)) continue;
+      pickIdx = i;
+      break;
+    }
+
+    // 2) Fallback: domain != last
+    if (pickIdx === -1) {
+      for (let i = 0; i < Math.min(scanLimit, queue.length); i++) {
+        const r = queue[i];
+        const dom = (r.source_domain || "").toLowerCase();
+        if (dom && dom === lastDomain) continue;
+        pickIdx = i;
+        break;
+      }
+    }
+
+    // 3) Final fallback: take the most recent remaining item
+    if (pickIdx === -1) pickIdx = 0;
+
+    const [picked] = queue.splice(pickIdx, 1);
+    out.push(picked);
+
+    const dom = (picked.source_domain || "").toLowerCase();
+    if (dom) lastDomain = dom;
+    remember(normalizeTitleKey(picked.title));
+  }
+
+  return out;
+}
+
 /* -------------------- Pipeline state / lock -------------------- */
 const pipeline = {
   running: false,
@@ -161,20 +233,10 @@ app.get("/a/:id", (req, res) => {
       return res.status(400).type("text").send("Invalid article id");
     }
 
-    // ✅ Use detected summary column and alias it as "summary"
     const row = db
       .prepare(
         `
-        SELECT
-          id,
-          title,
-          url,
-          category,
-          published_at,
-          created_at,
-          ${SUMMARY_COL} AS summary,
-          source_domain,
-          source_name
+        SELECT id, title, url, category, published_at, created_at, summary, source_domain, source_name
         FROM articles
         WHERE id = ?
         LIMIT 1
@@ -189,11 +251,7 @@ app.get("/a/:id", (req, res) => {
     const stamp = formatStamp(row.published_at || row.created_at);
     const cat = row.category ? escapeHtml(row.category) : "";
     const title = escapeHtml(row.title);
-
-    // ✅ Safer extraction + trim
-    const summaryText = String(row.summary ?? "").trim();
-    const summary = escapeHtml(summaryText);
-
+    const summary = escapeHtml(row.summary || "");
     const source = escapeHtml(row.source_domain || row.source_name || "");
     const sourceUrl = row.url || "";
 
@@ -232,29 +290,11 @@ app.get("/a/:id", (req, res) => {
       <div class="meta">${cat}${cat && stamp ? " • " : ""}${stamp}</div>
       <div class="title">${title}</div>
 
-      ${
-        summary
-          ? `<div class="summary">${summary}</div>`
-          : `<div class="summary summary-empty">Summary not available yet.</div>`
-      }
+      ${summary ? `<div class="summary">${summary}</div>` : ""}
 
-      <div class="source-row">
-        <div class="source">
-          Source:
-          <a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer">
-            ${source || "link"}
-          </a>
-        </div>
-
-        <div class="actions"
-             data-title="${escapeHtml(row.title)}"
-             data-link="${escapeHtml(`${req.protocol}://${req.get("host")}/a/${row.id}`)}">
-          <button class="pill share-primary"
-                  type="button"
-                  data-action="native">
-            ➦ Share
-          </button>
-        </div>
+      <div class="source">
+        Source:
+        <a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer">${source || "link"}</a>
       </div>
     </div>
 
@@ -264,28 +304,6 @@ app.get("/a/:id", (req, res) => {
   </main>
 
   <script src="/theme.js"></script>
-
-  <script>
-  document.addEventListener("click", async (e) => {
-    const btn = e.target.closest('[data-action="native"]');
-    if (!btn) return;
-
-    e.preventDefault();
-
-    const actions = btn.closest(".actions");
-    if (!actions) return;
-
-    const title = actions.getAttribute("data-title") || "";
-    const link = actions.getAttribute("data-link") || "";
-
-    if (navigator.share) {
-      try {
-        await navigator.share({ title, text: title, url: link });
-      } catch {}
-    }
-  });
-</script>           
-
 </body>
 </html>`;
 
@@ -298,29 +316,22 @@ app.get("/a/:id", (req, res) => {
 /* -------------------- API -------------------- */
 app.get("/api/articles", (req, res) => {
   try {
-    // ✅ Only show summarized articles (using detected summary column)
+    // Only show summarized articles
     const rows = db
       .prepare(
         `
-        SELECT
-          id,
-          title,
-          url,
-          category,
-          published_at,
-          created_at,
-          ${SUMMARY_COL} AS summary,
-          source_domain,
-          source_name
+        SELECT id, title, url, category, published_at, created_at, summarized_at, summary, source_domain, source_name
         FROM articles
-        WHERE ${SUMMARY_COL} IS NOT NULL AND ${SUMMARY_COL} != ''
+        WHERE summary IS NOT NULL AND summary != ''
         ORDER BY datetime(created_at) DESC
         LIMIT 5000
       `
       )
       .all();
 
-    res.json(rows);
+    // Soft diversity shaping (no caps): interleave domains + reduce near-duplicate headlines.
+    const shaped = shapeFeed(rows);
+    res.json(shaped);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -334,15 +345,11 @@ app.get("/_version", (req, res) => {
 app.get("/_debug", (req, res) => {
   try {
     const total = db.prepare("SELECT COUNT(*) AS c FROM articles").get().c;
-
-    // Note: Keep these, but now they should ideally use SUMMARY_COL too.
-    // If you want, I can update these counters as well.
     const summarized = db
-      .prepare(`SELECT COUNT(*) AS c FROM articles WHERE ${SUMMARY_COL} IS NOT NULL AND ${SUMMARY_COL} != ''`)
+      .prepare("SELECT COUNT(*) AS c FROM articles WHERE summary IS NOT NULL AND summary != ''")
       .get().c;
-
     const unsummarized = db
-      .prepare(`SELECT COUNT(*) AS c FROM articles WHERE ${SUMMARY_COL} IS NULL OR ${SUMMARY_COL} = ''`)
+      .prepare("SELECT COUNT(*) AS c FROM articles WHERE summary IS NULL OR summary = ''")
       .get().c;
 
     const cols = db.prepare("PRAGMA table_info(articles)").all().map((r) => r.name);
@@ -350,7 +357,6 @@ app.get("/_debug", (req, res) => {
     res.json({
       ok: true,
       db_path: DB_PATH,
-      summary_col_detected: SUMMARY_COL,
       columns: cols,
       total,
       summarized,
@@ -394,6 +400,61 @@ app.get("/admin/status", (req, res) => {
   });
 });
 
+// Domain distribution (quick sanity tool)
+// Examples:
+//   /admin/sources?token=...               -> all time
+//   /admin/sources?token=...&days=7        -> last 7 days
+//   /admin/sources?token=...&days=2&limit=20
+app.get("/admin/sources", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+
+  const days = req.query.days ? Number(req.query.days) : null;
+  const limit = req.query.limit ? Number(req.query.limit) : 50;
+  const summarizedOnly = (req.query.summarized_only || "true") !== "false";
+
+  try {
+    let where = "1=1";
+    const params = {};
+
+    if (summarizedOnly) {
+      where += " AND summary IS NOT NULL AND summary != ''";
+    }
+
+    if (days && Number.isFinite(days) && days > 0) {
+      // Use created_at for consistency with feed ordering.
+      where += " AND datetime(created_at) >= datetime('now', @since)";
+      params.since = `-${Math.floor(days)} days`;
+    }
+
+    const rows = db
+      .prepare(
+        `
+        SELECT COALESCE(NULLIF(source_domain, ''), COALESCE(NULLIF(source_name, ''), '(unknown)')) AS domain,
+               COUNT(*) AS count
+        FROM articles
+        WHERE ${where}
+        GROUP BY domain
+        ORDER BY count DESC
+        LIMIT @limit
+      `
+      )
+      .all({ ...params, limit: Number.isFinite(limit) ? limit : 50 });
+
+    const totalRow = db.prepare(`SELECT COUNT(*) AS c FROM articles WHERE ${where}`).get(params);
+    const total = totalRow?.c || 0;
+
+    const out = rows.map((r) => ({
+      domain: r.domain,
+      count: r.count,
+      pct: total ? Math.round((r.count / total) * 1000) / 10 : 0,
+    }));
+
+    res.json({ ok: true, days: days || null, summarizedOnly, total, top: out });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.get("/admin/reset", (req, res) => {
   if (!requireAdmin(req, res)) return;
 
@@ -420,4 +481,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
