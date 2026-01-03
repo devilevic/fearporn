@@ -170,25 +170,30 @@
             <div class="title">${escapeHtml(a.title)}</div>
             <p class="summary">${escapeHtml(a.summary)}</p>
 
-          <div class="source-row">
-            <div class="source">
-              Source:
-              <a href="${escapeHtml(a.url)}" target="_blank" rel="noopener noreferrer">
-                ${escapeHtml(domain)}
-              </a>
-            </div>
+            <div class="source-row">
+              <div class="source">
+                Source:
+                <a href="${escapeHtml(a.url)}" target="_blank" rel="noopener noreferrer">
+                  ${escapeHtml(domain)}
+                </a>
+              </div>
 
-            <div class="actions"
-               data-title="${escapeHtml(a.title)}"
-               data-link="${escapeHtml(permalink)}">
-              <button class="pill share-primary"
-                      type="button"
-                      data-action="native">
-                ➦ Share
-              </button>
-            </div>
-          </div>
+              <div class="actions"
+                 data-title="${escapeHtml(a.title)}"
+                 data-link="${escapeHtml(permalink)}">
+                <button class="pill share-primary"
+                        type="button"
+                        data-action="native">
+                  ➦ Share
+                </button>
 
+                <button class="pill share-primary"
+                        type="button"
+                        data-action="copy">
+                  ⧉ Copy link
+                </button>
+              </div>
+            </div>
 
           </article>
         `);
@@ -199,7 +204,7 @@
 
     load();
 
-    // Share handlers (minimal addition, uses event delegation)
+    // Share + Copy handlers (uses event delegation)
     document.getElementById("feed").addEventListener("click", async (e) => {
       const actionEl = e.target.closest("[data-action]");
       if (!actionEl) return;
@@ -211,9 +216,7 @@
 
       const title = actions.getAttribute("data-title") || "";
       const link = actions.getAttribute("data-link") || "";
-
       const action = actionEl.getAttribute("data-action");
-      const enc = encodeURIComponent;
 
       if (action === "native") {
         if (navigator.share) {
@@ -224,7 +227,40 @@
         return;
       }
 
-      
+      if (action === "copy") {
+        const btn = actionEl;
+        const originalText = btn.textContent;
+
+        async function doCopy(text) {
+          // Prefer Clipboard API
+          if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+            return;
+          }
+          // Fallback
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          ta.setAttribute("readonly", "");
+          ta.style.position = "fixed";
+          ta.style.left = "-9999px";
+          ta.style.top = "-9999px";
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          document.body.removeChild(ta);
+        }
+
+        try {
+          await doCopy(link);
+          btn.textContent = "✓ Copied";
+          setTimeout(() => { btn.textContent = originalText; }, 1200);
+        } catch {
+          // If copy fails, at least surface the link
+          btn.textContent = "Copy failed";
+          setTimeout(() => { btn.textContent = originalText; }, 1200);
+        }
+        return;
+      }
     });
   </script>
 </body>
